@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
 import cookieParser from 'cookie-parser';
-import helmet from 'helmet';
+import helmetImport from 'helmet';
 import { config } from './config.js';
 import { errorHandler, HttpError } from './lib/http.js';
 import { requireAuth, requireClientHeader } from './lib/auth.js';
@@ -18,6 +18,11 @@ import {
   notificationsRouter,
   voiceRouter,
 } from './routes/misc.js';
+
+// helmet ships separate ESM and CommonJS type definitions. Depending on how TypeScript resolves
+// them, the default import is either the function or a module object with a `default` property.
+const helmet: typeof import('helmet').default =
+  (helmetImport as unknown as { default?: typeof import('helmet').default }).default ?? (helmetImport as unknown as typeof import('helmet').default);
 
 export function createApp() {
   const app = express();
