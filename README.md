@@ -20,7 +20,14 @@ Demo accounts (password `Jpm@12345`): `pradeep@jpm.local` (admin), `ashok@jpm.lo
 
 Without `DATABASE_URL`, the server uses **PGlite** — real PostgreSQL compiled to WebAssembly, stored in `server/data/pglite`. Only one server process may use that folder at a time (the server refuses to start if another holds it). To reset demo data, stop the server and delete `server/data/`.
 
-## Production
+## Deploy on Render
+
+`render.yaml` creates the web service, a PostgreSQL database and a 1 GB disk for uploads.
+In Render: **New → Blueprint** → select this repository. When asked, enter `ADMIN_NAME`, `ADMIN_EMAIL`
+and `ADMIN_PASSWORD` (min 8 characters) — the first admin account is created from these on first start.
+`JWT_SECRET` is generated automatically. After signing in, add your team under Settings → Users.
+
+## Production (any Node host)
 
 ```bash
 npm run build

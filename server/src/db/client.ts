@@ -49,7 +49,7 @@ async function connect(): Promise<Database> {
     const { default: pg } = await import('pg');
     const pool = new pg.Pool({
       connectionString: config.databaseUrl,
-      max: 10,
+      max: Number(process.env.PG_POOL_MAX ?? 10),
       options: `-c timezone=${config.timezone}`,
     });
     closeFn = () => pool.end();

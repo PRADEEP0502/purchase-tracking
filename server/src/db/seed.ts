@@ -158,6 +158,39 @@ export async function seedIfEmpty(): Promise<boolean> {
   return true;
 }
 
+/**
+ * Production first run: when the database has no users, create the first admin from
+ * ADMIN_EMAIL / ADMIN_PASSWORD (and ADMIN_NAME) plus the standard JPM sections.
+ * Does nothing once any user exists, so changing these variables later has no effect.
+ */
+export async function ensureInitialAdmin(): Promise<void> {
+  const [{ count }] = await db.select({ count: sql<number>`count(*)::int` }).from(schema.users);
+  if (count > 0) return;
+
+  const email = process.env.ADMIN_EMAIL?.trim().toLowerCase();
+  const password = process.env.ADMIN_PASSWORD ?? '';
+  if (!email || password.length < 8) {
+    console.warn('No users exist. Set ADMIN_EMAIL and ADMIN_PASSWORD (min 8 characters) to create the first admin.');
+    return;
+  }
+
+  await db.transaction(async (tx) => {
+    const [{ sectionCount }] = await tx.select({ sectionCount: sql<number>`count(*)::int` }).from(schema.sections);
+    if (sectionCount === 0) {
+      await tx
+        .insert(schema.sections)
+        .values(SECTIONS.map(([name, icon, description], i) => ({ name, icon, description, sortOrder: i + 1 })));
+    }
+    await tx.insert(schema.users).values({
+      name: process.env.ADMIN_NAME?.trim() || 'Admin',
+      email,
+      role: 'admin',
+      passwordHash: await bcrypt.hash(password, 10),
+    });
+  });
+  console.log(`Created first admin account ${email}.`);
+}
+
 // Allow `npm run seed`.
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   await runMigrations();

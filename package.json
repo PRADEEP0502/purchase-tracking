@@ -3,6 +3,9 @@
   "private": true,
   "version": "1.0.0",
   "description": "JPM Purchase Task Manager — internal purchase request tracking",
+  "engines": {
+    "node": ">=20"
+  },
   "workspaces": [
     "server",
     "web"
