@@ -50,6 +50,8 @@ The server serves the built web app and the API from one port. See `server/.env.
 
 - **Tasks** — item, quantity + unit, optional section and assignee, priority (Normal / High / Urgent), due date, description. Status is only `pending` or `completed`.
 - **Inbox** — pending tasks missing a section or an assignee (triage queue).
+- **Structures** — an admin-defined hierarchy of any depth (`task_structures`, self-referencing `parent_id`) that gives a task its context, e.g. a machine and its parts. Nothing is hardcoded: admins build it in **Settings → Structures**, and can also add one inline while creating a task. A task stores its deepest selected structure; the path above it is shown separately from the title. Optional on every task.
+- **Actions** — admin-managed list (Purchase, Repair, Replacement, … seeded by migration `0001`) in **Settings → Actions**. The first active action is the default for new tasks. Structures and actions are disabled rather than deleted once tasks use them; changes are recorded in the activity log.
 - **Voice task creation** — the browser's speech recognition (Chrome/Edge/Android; `en-IN` or `ta-IN`) produces a transcript; `POST /api/voice/parse` turns Tamil / English / Tanglish into fields using the live list of sections, users and past items. The user always confirms and can edit before the task is created. Typing the sentence works as a fallback on browsers without speech recognition.
   - Parser: `server/src/voice/parser.ts` (rule-based, handles `Maintenance-ku`, `rendu`, `urgent-ah`, `venum`, Tamil script, units like `10 meter`, `5kg`). Tests: `npm test`.
   - The speech provider is abstracted in `web/src/lib/speech.ts`; the parser sits behind a `PurchaseParser` interface — either can be replaced (e.g. a server-side STT service or an LLM parser) without UI changes.
@@ -57,6 +59,8 @@ The server serves the built web app and the API from one port. See `server/.env.
 - **Close** — confirmation in the task panel; from lists, the checkbox closes after a 4-second Undo window. Closed by / date / time are recorded. Admins can reopen.
 - **Activity history** — every create, assign, edit, message, file, close and reopen is logged.
 - **Notifications** — assignment, your request closed/reopened, urgent tasks in your sections, new messages on tasks you are involved in.
+- **Assignment alerts & acknowledgement** — assigning a task alerts the assignee instantly over SSE: an in-app alert card (task, structure, action, priority, assigned by, due date) with *Open task* / *Acknowledge*, a synthesized chime (normal: soft, high: two-tone, urgent: three stronger pulses — never looped), and a browser notification when the tab is in the background (users enable it from the prompt or Settings → Alerts). Sound plays only once the browser allows audio (after the first click). The assignee acknowledges, then optionally *Start work*; the stage (Awaiting acknowledgement → Acknowledged → In progress → Completed) is derived from timestamps, so the existing `pending`/`completed` status is unchanged. Reassignment resets acknowledgement, clears the previous assignee's alerts and alerts the new one.
+- **Reminders (server-side)** — urgent tasks not acknowledged are reminded every `URGENT_REMINDER_MINUTES` (default 10) up to `URGENT_REMINDER_MAX` times (default 6); assignees get one "due today" reminder and assignee + creator one "overdue" reminder per due date. Reminders are claimed atomically, so several server instances never duplicate them. A closed browser cannot ring: alerts arrive when the app is next open. Web Push (service worker + VAPID) would plug into `notify()` in `server/src/lib/activity.ts`, the single delivery point.
 
 ## Permissions
 
@@ -87,13 +91,15 @@ All responses are `{ data, meta? }` or `{ error: { code, message, fields? } }`.
 
 ```
 POST   /api/auth/login | /api/auth/logout      GET|PATCH /api/auth/me
-GET    /api/tasks?view=&status=&section=&assignee=&priority=&createdBy=&q=&createdFrom=&createdTo=&dueFrom=&dueTo=&closedFrom=&closedTo=&due=&page=&pageSize=
+GET    /api/tasks?view=&status=&stage=&section=&structure=&action=&assignee=&priority=&createdBy=&q=&createdFrom=&createdTo=&dueFrom=&dueTo=&closedFrom=&closedTo=&due=&page=&pageSize=
 POST   /api/tasks          GET|PATCH|DELETE /api/tasks/:id
-POST   /api/tasks/:id/close | /reopen
+POST   /api/tasks/:id/close | /reopen | /acknowledge | /start
 GET    /api/tasks/:id/thread | /comments | /activity
 POST   /api/tasks/:id/comments | /voice | /attachments     DELETE /api/tasks/:id/attachments/:attachmentId
 GET    /api/sections       POST /api/sections   PATCH /api/sections/:id   POST /api/sections/reorder
 GET    /api/users          POST /api/users      PATCH /api/users/:id
+GET    /api/structures     POST /api/structures PATCH|DELETE /api/structures/:id   POST /api/structures/reorder
+GET    /api/actions        POST /api/actions    PATCH|DELETE /api/actions/:id      POST /api/actions/reorder
 GET    /api/dashboard      GET /api/activity    GET /api/notifications   POST /api/notifications/read
 POST   /api/voice/parse    GET /api/files/attachments/:id | /api/files/voice/:id    GET /api/events (SSE)
 ```

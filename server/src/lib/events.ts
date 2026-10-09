@@ -9,7 +9,18 @@ export type LiveEvent =
   | { type: 'task.deleted'; taskId: number }
   | { type: 'task.thread'; taskId: number }
   | { type: 'sections.changed' }
-  | { type: 'notification'; notificationId: number };
+  | { type: 'catalog.changed' }
+  | {
+      type: 'notification';
+      notificationId: number;
+      taskId: number;
+      kind: string;
+      level: 'normal' | 'high' | 'urgent';
+      message: string;
+      data: Record<string, unknown>;
+      createdAt: string;
+    }
+  | { type: 'alerts.cleared'; taskId: number };
 
 interface Client {
   userId: number;

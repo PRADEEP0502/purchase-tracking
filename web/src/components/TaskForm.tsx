@@ -4,9 +4,10 @@ import { Flag, Mic, Paperclip, X } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
 import { errorMessage, ApiError } from '../lib/api';
 import { cx, fileSize, taskLabel, UNITS, PRIORITY_LABEL } from '../lib/format';
-import { useCreateTask, useSections, useUpdateTask, useUsers, type TaskInput } from '../lib/queries';
+import { useActions, useCreateTask, useSections, useUpdateTask, useUsers, type TaskInput } from '../lib/queries';
 import type { Priority } from '../lib/types';
 import { useAppState } from './app-state';
+import { StructurePicker } from './StructurePicker';
 import { Button, Dialog, Field, Input, Kbd, Select, Textarea } from './ui';
 
 export const MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -25,6 +26,8 @@ const empty: TaskInput = {
   unit: 'Nos',
   description: null,
   sectionId: null,
+  structureId: null,
+  actionId: null,
   assignedTo: null,
   priority: 'normal',
   dueDate: null,
@@ -35,6 +38,8 @@ function splitQuantity(title: string): { title: string; quantity: number; unit: 
   const m = /^(.*?\S)\s*[–—-]?\s+(\d+(?:\.\d+)?)\s*([a-zA-Z]+)?\.?$/.exec(title.trim());
   if (!m) return null;
   const unitRaw = m[3]?.toLowerCase();
+  // "Bearing 6672" — a long bare number is a part/model number, not a quantity.
+  if (!unitRaw && m[2].replace('.', '').length >= 4) return null;
   const unit = unitRaw ? UNITS.find((u) => u.toLowerCase() === unitRaw || `${u.toLowerCase()}s` === unitRaw || (u === 'Nos' && ['no', 'nos', 'pcs', 'pc'].includes(unitRaw)) || (u === 'M' && ['m', 'mtr', 'meter', 'meters', 'metre'].includes(unitRaw)) || (u === 'Kg' && ['kg', 'kgs', 'kilo'].includes(unitRaw)) || (u === 'L' && ['l', 'ltr', 'litre', 'liter'].includes(unitRaw)) || (u === 'Packets' && ['packet', 'pkt', 'pack'].includes(unitRaw))) : 'Nos';
   if (!unit) return null;
   return { title: m[1].replace(/[–—-]\s*$/, '').trim(), quantity: Number(m[2]), unit };
@@ -45,6 +50,7 @@ export function TaskFormDialog() {
   const location = useLocation();
   const sections = useSections();
   const users = useUsers();
+  const actions = useActions();
   const create = useCreateTask();
   const update = useUpdateTask(editing?.id ?? 0);
   const [form, setForm] = useState<TaskInput>(empty);
@@ -65,20 +71,32 @@ export function TaskFormDialog() {
         unit: editing.unit,
         description: editing.description,
         sectionId: editing.sectionId,
+        structureId: editing.structureId,
+        actionId: editing.actionId,
         assignedTo: editing.assignedTo,
         priority: editing.priority,
         dueDate: editing.dueDate,
       });
-      setShowMore(!!(editing.description || editing.dueDate));
+      setShowMore(!!editing.description);
     } else {
       // Default the section to the one being viewed.
       const m = /^\/sections\/(\d+)/.exec(location.pathname);
       const sectionId = createPrefill?.sectionId ?? (m ? Number(m[1]) : null);
-      setForm({ ...empty, ...createPrefill, sectionId });
-      setShowMore(!!(createPrefill?.description || createPrefill?.dueDate));
+      // New tasks start with the first action in the admin's order (Purchase by default).
+      const actionId = createPrefill?.actionId ?? actions.data?.[0]?.id ?? null;
+      setForm({ ...empty, ...createPrefill, sectionId, actionId });
+      setShowMore(!!createPrefill?.description);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [createOpen]);
+
+  // If the action list arrives after the form opened, apply the default then.
+  useEffect(() => {
+    if (createOpen && !editing && actions.data?.length) {
+      setForm((f) => (f.actionId === null && createPrefill?.actionId === undefined ? { ...f, actionId: actions.data![0].id } : f));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [actions.data, createOpen]);
 
   const set = <K extends keyof TaskInput>(k: K, v: TaskInput[K]) => {
     setForm((f) => ({ ...f, [k]: v }));
@@ -87,7 +105,7 @@ export function TaskFormDialog() {
 
   const validate = (): boolean => {
     const e: Record<string, string> = {};
-    if (!form.title.trim()) e.title = 'Enter what needs to be purchased.';
+    if (!form.title.trim()) e.title = 'Enter what needs to be done.';
     if (!Number.isFinite(form.quantity) || form.quantity <= 0) e.quantity = 'Enter a quantity.';
     setErrors(e);
     return !Object.keys(e).length;
@@ -132,7 +150,7 @@ export function TaskFormDialog() {
     <Dialog
       open={createOpen}
       onClose={closeCreate}
-      title={editing ? 'Edit purchase task' : 'Add purchase'}
+      title={editing ? 'Edit task' : 'Add task'}
       width="max-w-xl"
       footer={
         <>
@@ -156,9 +174,38 @@ export function TaskFormDialog() {
         className="space-y-4 px-5 py-4"
         noValidate
       >
+        <StructurePicker value={form.structureId} onChange={(id) => set('structureId', id)} />
+
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Action" error={errors.actionId}>
+            <Select value={form.actionId ?? ''} onChange={(e) => set('actionId', e.target.value ? Number(e.target.value) : null)} invalid={!!errors.actionId}>
+              <option value="">No action</option>
+              {actions.data?.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+              {editing?.actionId && !actions.data?.some((a) => a.id === editing.actionId) && (
+                <option value={editing.actionId}>{editing.actionName} (disabled)</option>
+              )}
+            </Select>
+          </Field>
+          <Field label="Section" error={errors.sectionId} hint={!form.sectionId ? 'Goes to Inbox if not selected' : undefined}>
+            <Select value={form.sectionId ?? ''} onChange={(e) => set('sectionId', e.target.value ? Number(e.target.value) : null)} invalid={!!errors.sectionId}>
+              <option value="">Select section</option>
+              {activeSections.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+              {editing?.sectionId && !activeSections.some((s) => s.id === editing.sectionId) && <option value={editing.sectionId}>{editing.sectionName} (disabled)</option>}
+            </Select>
+          </Field>
+        </div>
+
         <div>
           <label htmlFor="task-title" className="mb-1.5 block text-[13px] font-medium text-ink-2">
-            What needs to be purchased?<span className="ml-0.5 text-urgent">*</span>
+            What needs to be done?<span className="ml-0.5 text-urgent">*</span>
           </label>
           <input
             id="task-title"
@@ -203,6 +250,24 @@ export function TaskFormDialog() {
               </Select>
             </div>
           </Field>
+          <Field label="Assign to" error={errors.assignedTo}>
+            <Select
+              value={form.assignedTo ?? ''}
+              onChange={(e) => set('assignedTo', e.target.value ? Number(e.target.value) : null)}
+              invalid={!!errors.assignedTo}
+              disabled={!!editing && !editing.permissions.assign}
+            >
+              <option value="">Unassigned</option>
+              {users.data?.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
           <Field label="Priority">
             <div className="grid h-9 grid-cols-3 overflow-hidden rounded-md border border-line-strong">
               {(['normal', 'high', 'urgent'] as Priority[]).map((p) => (
@@ -228,49 +293,18 @@ export function TaskFormDialog() {
               ))}
             </div>
           </Field>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Section" error={errors.sectionId} hint={!form.sectionId ? 'Goes to Inbox if not selected' : undefined}>
-            <Select value={form.sectionId ?? ''} onChange={(e) => set('sectionId', e.target.value ? Number(e.target.value) : null)} invalid={!!errors.sectionId}>
-              <option value="">Select section</option>
-              {activeSections.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-              {editing?.sectionId && !activeSections.some((s) => s.id === editing.sectionId) && <option value={editing.sectionId}>{editing.sectionName} (disabled)</option>}
-            </Select>
-          </Field>
-          <Field label="Assign to" error={errors.assignedTo}>
-            <Select
-              value={form.assignedTo ?? ''}
-              onChange={(e) => set('assignedTo', e.target.value ? Number(e.target.value) : null)}
-              invalid={!!errors.assignedTo}
-              disabled={!!editing && !editing.permissions.assign}
-            >
-              <option value="">Unassigned</option>
-              {users.data?.map((u) => (
-                <option key={u.id} value={u.id}>
-                  {u.name}
-                </option>
-              ))}
-            </Select>
+          <Field label="Due date" error={errors.dueDate}>
+            <Input type="date" value={form.dueDate ?? ''} onChange={(e) => set('dueDate', e.target.value || null)} />
           </Field>
         </div>
 
         {showMore ? (
-          <>
-            <Field label="Due date" error={errors.dueDate}>
-              <Input type="date" value={form.dueDate ?? ''} onChange={(e) => set('dueDate', e.target.value || null)} className="max-w-[200px]" />
-            </Field>
-            <Field label="Description">
-              <Textarea value={form.description ?? ''} onChange={(e) => set('description', e.target.value)} placeholder="Optional — specification, make, reason…" maxLength={4000} rows={3} />
-            </Field>
-          </>
+          <Field label="Description">
+            <Textarea value={form.description ?? ''} onChange={(e) => set('description', e.target.value)} placeholder="Optional — specification, make, reason…" maxLength={4000} rows={3} />
+          </Field>
         ) : (
           <button type="button" onClick={() => setShowMore(true)} className="text-[13px] font-medium text-accent hover:underline">
-            + Due date & description
+            + Add description
           </button>
         )}
 

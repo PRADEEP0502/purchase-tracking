@@ -1,18 +1,17 @@
 # Render Blueprint — https://render.com/docs/blueprint-spec
-# Creates the web service (Node), a PostgreSQL database and a persistent disk for uploads.
+# Creates the web service (Node) and a PostgreSQL database. Currently on the FREE plans (testing).
 services:
   - type: web
     name: jpm-purchase
     runtime: node
-    plan: starter # a persistent disk needs a paid instance; the free plan would lose uploads
+    # FREE plan (testing): sleeps after 15 min idle, and uploads are lost on each deploy/restart
+    # because free instances have no persistent disk. For real use switch to `plan: starter`
+    # and add back the disk below (mountPath /var/data, STORAGE_DIR=/var/data/uploads).
+    plan: free
     region: singapore
     buildCommand: npm ci --include=dev && npm run build
     startCommand: npm start
     healthCheckPath: /api/health
-    disk:
-      name: uploads
-      mountPath: /var/data
-      sizeGB: 1
     envVars:
       - key: NODE_ENV
         value: production
@@ -24,8 +23,6 @@ services:
         fromDatabase:
           name: jpm-purchase-db
           property: connectionString
-      - key: STORAGE_DIR
-        value: /var/data/uploads
       - key: APP_TIMEZONE
         value: Asia/Kolkata
       # First admin account, created on first start when the database has no users.
@@ -39,7 +36,7 @@ services:
 
 databases:
   - name: jpm-purchase-db
-    plan: basic-256mb
+    plan: free # Render deletes free databases after 30 days — use basic-256mb for real use
     region: singapore
     databaseName: jpm_purchase
     user: jpm

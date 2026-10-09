@@ -1,5 +1,20 @@
 export type Priority = 'normal' | 'high' | 'urgent';
 export type Status = 'pending' | 'completed';
+export type TaskStage = 'new' | 'assigned' | 'acknowledged' | 'in_progress' | 'completed';
+export type AlertLevel = 'normal' | 'high' | 'urgent';
+
+/** Structured details attached to assignment alerts and reminders. */
+export interface AlertData {
+  title?: string;
+  label?: string;
+  structurePath?: string[];
+  action?: string | null;
+  priority?: Priority;
+  assignedBy?: string | null;
+  dueDate?: string | null;
+  reminder?: number;
+  maxReminders?: number;
+}
 
 export interface Me {
   id: number;
@@ -20,6 +35,25 @@ export interface Section {
   pendingCount: number;
 }
 
+/** A node in the admin-defined hierarchy (any depth; parentId null = top level). */
+export interface TaskStructure {
+  id: number;
+  name: string;
+  parentId: number | null;
+  isActive: boolean;
+  sortOrder: number;
+  taskCount: number;
+  childCount: number;
+}
+
+export interface TaskAction {
+  id: number;
+  name: string;
+  isActive: boolean;
+  sortOrder: number;
+  taskCount: number;
+}
+
 export interface UserSummary {
   id: number;
   name: string;
@@ -32,6 +66,8 @@ export interface UserSummary {
 
 export interface TaskPermissions {
   edit: boolean;
+  acknowledge: boolean;
+  start: boolean;
   assign: boolean;
   close: boolean;
   reopen: boolean;
@@ -53,12 +89,28 @@ export interface Task {
   closedAt: string | null;
   sectionId: number | null;
   sectionName: string | null;
+  /** Deepest selected structure. */
+  structureId: number | null;
+  structureName: string | null;
+  parentStructureId: number | null;
+  parentStructureName: string | null;
+  /** Root-first names, e.g. ["Parent", "Child"]. Empty when no structure is set. */
+  structurePath: string[];
+  actionId: number | null;
+  actionName: string | null;
   assignedTo: number | null;
   assigneeName: string | null;
   createdBy: number;
   creatorName: string | null;
   closedBy: number | null;
   closerName: string | null;
+  assignedAt: string | null;
+  acknowledgedAt: string | null;
+  acknowledgedBy: number | null;
+  acknowledgedByName: string | null;
+  startedAt: string | null;
+  /** Work stage derived on the server: new → assigned → acknowledged → in progress → completed. */
+  stage: TaskStage;
   attachmentCount: number;
   commentCount: number;
   voiceNoteCount: number;
@@ -111,6 +163,8 @@ export interface Notification {
   taskId: number | null;
   type: string;
   message: string;
+  level: AlertLevel;
+  data: AlertData;
   readAt: string | null;
   createdAt: string;
 }
@@ -123,6 +177,7 @@ export interface Dashboard {
     completed: number;
     overdue: number;
     mine: number;
+    awaitingAck: number;
     inbox: number;
     completedToday: number;
   };
@@ -136,9 +191,11 @@ export interface ParsedPurchase {
   unit: string;
   section: { id: number; name: string } | null;
   assignee: { id: number; name: string } | null;
+  structure: { id: number; name: string; path: string[] } | null;
+  action: { id: number; name: string } | null;
   priority: Priority;
   dueDate: string | null;
-  unmatched: { section?: string; person?: string };
+  unmatched: { section?: string; person?: string; structure?: string };
   missing: Array<'title' | 'quantity' | 'section' | 'assignee'>;
   confident: boolean;
 }

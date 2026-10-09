@@ -83,6 +83,7 @@ export function Popover({
         createPortal(
           <div
             ref={panel}
+            data-popover
             className="fixed z-[60] flex flex-col overflow-hidden rounded-lg border border-line bg-surface shadow-xl animate-in"
             style={{ top: pos.top, left: pos.left, width: Math.min(width, window.innerWidth - 16), maxHeight: pos.maxHeight }}
             onClick={(e) => e.stopPropagation()}

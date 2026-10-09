@@ -2,6 +2,9 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import {
   ArrowLeft,
+  BellRing,
+  Play,
+  Siren,
   CalendarDays,
   Check,
   CheckCircle2,
@@ -16,12 +19,12 @@ import {
   X,
 } from 'lucide-react';
 import { api, ApiError, errorMessage } from '../lib/api';
-import { cx, dueInfo, fileSize, fmtDate, fmtDateOnly, fmtDateTime, fmtTime, formatQty, PRIORITY_LABEL, taskLabel, unitLabel } from '../lib/format';
-import { useInvalidateTasks, useSections, useTask, useTaskAction, useTaskActivity, useUpdateTask, useUsers } from '../lib/queries';
+import { cx, dueInfo, fileSize, fmtDate, fmtDateOnly, fmtDateTime, fmtTime, formatQty, PRIORITY_LABEL, relative, taskLabel, unitLabel } from '../lib/format';
+import { useActions, useInvalidateTasks, useSections, useTask, useTaskAction, useTaskActivity, useUpdateTask, useUsers } from '../lib/queries';
 import type { ActivityEntry, Priority, TaskDetail } from '../lib/types';
 import { useAppState } from './app-state';
 import { MenuItem, Popover } from './Popover';
-import { PriorityBadge, SectionIcon, StatusBadge } from './task-bits';
+import { ActionBadge, PriorityBadge, SectionIcon, StageBadge, StatusBadge, StructurePath } from './task-bits';
 import { Composer, Thread } from './Thread';
 import { Avatar, Button, ConfirmDialog, ErrorState, IconButton, Segmented, Skeleton } from './ui';
 
@@ -31,7 +34,7 @@ export function TaskPanel() {
   useEffect(() => {
     if (!taskId) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !document.querySelector('[role="dialog"][aria-modal="true"]')) closeTask();
+      if (e.key === 'Escape' && !document.querySelector('[role="dialog"][aria-modal="true"], [data-popover]')) closeTask();
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
@@ -205,6 +208,15 @@ function Summary({ task }: { task: TaskDetail }) {
   const action = useTaskAction();
   const [confirm, setConfirm] = useState<'close' | 'reopen' | null>(null);
 
+  const runAction = async (name: 'acknowledge' | 'start', success: string) => {
+    try {
+      await action.mutateAsync({ id: task.id, action: name });
+      toast.success(success);
+    } catch (e) {
+      toast.error(errorMessage(e, 'Unable to update task. Please try again.'));
+    }
+  };
+
   const run = async () => {
     if (!confirm) return;
     try {
@@ -218,6 +230,12 @@ function Summary({ task }: { task: TaskDetail }) {
 
   return (
     <div>
+      {(task.actionName || task.structurePath.length > 0) && (
+        <div className="mb-2 flex min-w-0 flex-wrap items-center gap-2 text-[13px]">
+          <ActionBadge name={task.actionName} />
+          <StructurePath path={task.structurePath} />
+        </div>
+      )}
       <div className="flex items-start justify-between gap-3">
         <h2 className={cx('text-xl leading-snug font-semibold tracking-tight', task.status === 'completed' && 'text-ink-2')}>
           {task.title} <span className="font-normal text-ink-2">– {formatQty(task.quantity)} {unitLabel(task.quantity, task.unit)}</span>
@@ -226,16 +244,55 @@ function Summary({ task }: { task: TaskDetail }) {
       <div className="mt-2 flex items-center gap-2">
         <StatusBadge status={task.status} />
         <PriorityBadge priority={task.priority} />
+        <StageBadge stage={task.stage} />
       </div>
+
+      {task.permissions.acknowledge && (
+        <div className={cx('mt-4 rounded-lg border px-4 py-3', task.priority === 'urgent' ? 'border-urgent/40 bg-urgent-soft' : 'border-high/30 bg-high-soft')}>
+          <p className={cx('flex items-center gap-2 text-sm font-semibold', task.priority === 'urgent' ? 'text-urgent' : 'text-high')}>
+            {task.priority === 'urgent' ? <Siren className="size-4" /> : <BellRing className="size-4" />}
+            {task.priority === 'urgent' ? 'Urgent task assigned to you' : 'New task assigned to you'}
+          </p>
+          <p className="mt-0.5 text-[13px] text-ink-2">
+            {task.assignedAt ? `Assigned ${relative(task.assignedAt)}. ` : ''}Tap Received to confirm you have got it — this stops alerts and reminders.
+          </p>
+          <Button
+            variant={task.priority === 'urgent' ? 'danger' : 'primary'}
+            className="mt-3 w-full sm:w-auto"
+            loading={action.isPending && action.variables?.action === 'acknowledge'}
+            icon={<Check className="size-4" />}
+            onClick={() => runAction('acknowledge', 'Marked as received')}
+          >
+            Received
+          </Button>
+        </div>
+      )}
 
       {task.status === 'pending' ? (
         task.permissions.close ? (
-          <Button variant="success" size="lg" className="mt-4 w-full" icon={<Check className="size-4" strokeWidth={2.5} />} onClick={() => setConfirm('close')}>
-            Close Task
-          </Button>
+          <div className="mt-4 flex gap-2">
+            {task.permissions.start && !task.permissions.acknowledge && (
+              <Button
+                size="lg"
+                className="flex-1"
+                loading={action.isPending && action.variables?.action === 'start'}
+                icon={<Play className="size-4" />}
+                onClick={() => runAction('start', 'Marked as in progress')}
+              >
+                Start work
+              </Button>
+            )}
+            <Button variant="success" size="lg" className="flex-1" icon={<Check className="size-4" strokeWidth={2.5} />} onClick={() => setConfirm('close')}>
+              Close Task
+            </Button>
+          </div>
         ) : (
           <p className="mt-4 rounded-md bg-subtle px-3 py-2 text-[13px] text-ink-2">
-            {task.assigneeName ? `Waiting for ${task.assigneeName} to purchase and close this task.` : 'Assign this task so someone can purchase it.'}
+            {task.assigneeName
+              ? task.stage === 'assigned'
+                ? `Waiting for ${task.assigneeName} to mark this task as received.`
+                : `Waiting for ${task.assigneeName} to complete and close this task.`
+              : 'Assign this task so someone can work on it.'}
           </p>
         )
       ) : (
@@ -290,6 +347,7 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 function Details({ task }: { task: TaskDetail }) {
   const users = useUsers();
   const sections = useSections();
+  const actions = useActions();
   const update = useUpdateTask(task.id);
   const invalidate = useInvalidateTasks();
   const due = dueInfo(task.dueDate, task.status);
@@ -309,6 +367,32 @@ function Details({ task }: { task: TaskDetail }) {
 
   return (
     <dl className="mt-5 grid grid-cols-[104px_1fr] border-t border-line pt-2">
+      {task.structurePath.map((name, i) => (
+        // Generic labels: the hierarchy can model machines, buildings, vehicles — anything.
+        <Row key={i} label={i === 0 ? 'Structure' : i === 1 ? 'Sub-structure' : `Level ${i + 1}`}>
+          <span className={i === task.structurePath.length - 1 ? 'font-medium' : undefined}>{name}</span>
+        </Row>
+      ))}
+      <Row label="Action">
+        {editable && task.permissions.edit ? (
+          <select className={inlineSelect} value={task.actionId ?? ''} onChange={(e) => patch({ actionId: e.target.value ? Number(e.target.value) : null }, 'Action updated')}>
+            <option value="">No action</option>
+            {actions.data?.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
+            {task.actionId && !actions.data?.some((a) => a.id === task.actionId) && <option value={task.actionId}>{task.actionName}</option>}
+          </select>
+        ) : task.actionName ? (
+          <ActionBadge name={task.actionName} />
+        ) : (
+          <span className="text-ink-3">—</span>
+        )}
+      </Row>
+      <Row label="Quantity">
+        {formatQty(task.quantity)} {unitLabel(task.quantity, task.unit)}
+      </Row>
       <Row label="Section">
         {editable && task.permissions.edit ? (
           <select className={inlineSelect} value={task.sectionId ?? ''} onChange={(e) => patch({ sectionId: e.target.value ? Number(e.target.value) : null }, 'Section updated')}>
@@ -360,6 +444,22 @@ function Details({ task }: { task: TaskDetail }) {
           PRIORITY_LABEL[task.priority]
         )}
       </Row>
+      {task.assignedTo && task.status === 'pending' && (
+        <Row label="Received">
+          {task.acknowledgedAt ? (
+            <span>
+              {task.acknowledgedByName ?? '—'} <span className="text-ink-3">· {fmtDateTime(task.acknowledgedAt)}</span>
+            </span>
+          ) : (
+            <span className="font-medium text-high">Not yet</span>
+          )}
+        </Row>
+      )}
+      {task.startedAt && (
+        <Row label="Started">
+          <span>{fmtDateTime(task.startedAt)}</span>
+        </Row>
+      )}
       <Row label="Due date">
         {task.dueDate ? (
           <span className={cx('inline-flex items-center gap-1.5', due?.tone === 'overdue' && 'font-medium text-urgent')}>
@@ -437,6 +537,28 @@ export function describeActivity(a: ActivityEntry): string {
       return a.metadata?.via === 'voice' ? `${who} created task by voice` : `${who} created task`;
     case 'assigned':
       return a.metadata?.toName ? `Assigned to ${a.metadata.toName}` : `${who} removed the assignee`;
+    case 'structure_changed': {
+      const from = (a.metadata?.from as string[] | undefined) ?? [];
+      const to = (a.metadata?.to as string[] | undefined) ?? [];
+      const name = (p: string[]) => p.join(' › ') || 'none';
+      // Same parent, different child → describe it as a child change.
+      if (from.length > 1 && to.length > 1 && from.slice(0, -1).join('\u0000') === to.slice(0, -1).join('\u0000')) {
+        return `${who} changed child structure from ${from[from.length - 1]} to ${to[to.length - 1]}`;
+      }
+      return `${who} changed structure from ${name(from)} to ${name(to)}`;
+    }
+    case 'action_changed':
+      return `${who} changed action from ${a.metadata?.from ?? 'none'} to ${a.metadata?.to ?? 'none'}`;
+    case 'reassigned':
+      return `${who} reassigned the task from ${a.metadata?.fromName ?? 'someone'} to ${a.metadata?.toName ?? 'nobody'}`;
+    case 'acknowledged':
+      return `${who} received the task`;
+    case 'started':
+      return `${who} started work`;
+    case 'priority_changed':
+      return `${who} changed priority from ${PRIORITY_LABEL[a.metadata?.from as Priority] ?? a.metadata?.from} to ${PRIORITY_LABEL[a.metadata?.to as Priority] ?? a.metadata?.to}`;
+    case 'due_date_changed':
+      return `${who} changed due date from ${a.metadata?.from ? fmtDateOnly(a.metadata.from) : 'none'} to ${a.metadata?.to ? fmtDateOnly(a.metadata.to) : 'none'}`;
     case 'updated':
       return `${who} updated ${(a.metadata?.fields as string[] | undefined)?.map((f) => ({ sectionId: 'section', dueDate: 'due date', assignedTo: 'assignee' })[f] ?? f).join(', ') ?? 'the task'}`;
     case 'closed':

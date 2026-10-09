@@ -10,6 +10,7 @@ import { authRouter } from './routes/auth.js';
 import { tasksRouter } from './routes/tasks.js';
 import { sectionsRouter } from './routes/sections.js';
 import { usersRouter } from './routes/users.js';
+import { actionsRouter, structuresRouter } from './routes/catalog.js';
 import {
   activityRouter,
   dashboardRouter,
@@ -61,6 +62,8 @@ export function createApp() {
   api.use('/tasks', tasksRouter);
   api.use('/sections', sectionsRouter);
   api.use('/users', usersRouter);
+  api.use('/structures', structuresRouter);
+  api.use('/actions', actionsRouter);
   api.use('/dashboard', dashboardRouter);
   api.use('/activity', activityRouter);
   api.use('/notifications', notificationsRouter);

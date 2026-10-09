@@ -1,13 +1,15 @@
-import { and, asc, desc, eq, exists, gte, ilike, inArray, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, exists, gte, ilike, inArray, isNotNull, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { db, schema } from '../db/client.js';
 import type { AuthUser } from '../lib/auth.js';
 import { taskPermissions, visibleTasksCondition } from '../lib/permissions.js';
+import { loadStructureTree, structureContext, withDescendants, type StructureTree } from './structures.js';
 
 const t = schema.purchaseTasks;
 const assignee = alias(schema.users, 'assignee');
 const creator = alias(schema.users, 'creator');
 const closer = alias(schema.users, 'closer');
+const acknowledger = alias(schema.users, 'acknowledger');
 
 const countOf = (table: typeof schema.attachments | typeof schema.comments | typeof schema.voiceNotes) =>
   sql<number>`(select count(*)::int from ${table} where ${table.taskId} = ${t.id})`;
@@ -26,12 +28,21 @@ export const taskSelection = {
   closedAt: t.closedAt,
   sectionId: t.sectionId,
   sectionName: schema.sections.name,
+  structureId: t.structureId,
+  structureName: schema.taskStructures.name,
+  actionId: t.actionId,
+  actionName: schema.taskActions.name,
   assignedTo: t.assignedTo,
   assigneeName: assignee.name,
   createdBy: t.createdBy,
   creatorName: creator.name,
   closedBy: t.closedBy,
   closerName: closer.name,
+  assignedAt: t.assignedAt,
+  acknowledgedAt: t.acknowledgedAt,
+  acknowledgedBy: t.acknowledgedBy,
+  acknowledgedByName: acknowledger.name,
+  startedAt: t.startedAt,
   attachmentCount: countOf(schema.attachments),
   commentCount: countOf(schema.comments),
   voiceNoteCount: countOf(schema.voiceNotes),
@@ -42,20 +53,36 @@ function baseQuery() {
     .select(taskSelection)
     .from(t)
     .leftJoin(schema.sections, eq(schema.sections.id, t.sectionId))
+    .leftJoin(schema.taskStructures, eq(schema.taskStructures.id, t.structureId))
+    .leftJoin(schema.taskActions, eq(schema.taskActions.id, t.actionId))
     .leftJoin(assignee, eq(assignee.id, t.assignedTo))
     .leftJoin(creator, eq(creator.id, t.createdBy))
-    .leftJoin(closer, eq(closer.id, t.closedBy));
+    .leftJoin(closer, eq(closer.id, t.closedBy))
+    .leftJoin(acknowledger, eq(acknowledger.id, t.acknowledgedBy));
 }
 
-export type TaskRow = Awaited<ReturnType<typeof baseQuery>>[number];
+export type TaskStage = 'new' | 'assigned' | 'acknowledged' | 'in_progress' | 'completed';
+
+/** Work stage derived from the open/closed status plus the assignment timestamps. */
+export function taskStage(row: Pick<BaseRow, 'status' | 'assignedTo' | 'acknowledgedAt' | 'startedAt'>): TaskStage {
+  if (row.status === 'completed') return 'completed';
+  if (row.startedAt) return 'in_progress';
+  if (row.acknowledgedAt) return 'acknowledged';
+  return row.assignedTo ? 'assigned' : 'new';
+}
+
+type BaseRow = Awaited<ReturnType<typeof baseQuery>>[number];
+export type TaskRow = BaseRow & ReturnType<typeof structureContext>;
+
+const withContext = (tree: StructureTree, row: BaseRow): TaskRow => ({ ...row, ...structureContext(tree, row.structureId) });
 
 export function withPermissions(user: AuthUser, row: TaskRow) {
-  return { ...row, permissions: taskPermissions(user, row) };
+  return { ...row, stage: taskStage(row), permissions: taskPermissions(user, row) };
 }
 
 export async function getTaskRow(id: number): Promise<TaskRow | undefined> {
-  const [row] = await baseQuery().where(eq(t.id, id));
-  return row;
+  const [[row], tree] = await Promise.all([baseQuery().where(eq(t.id, id)), loadStructureTree()]);
+  return row ? withContext(tree, row) : undefined;
 }
 
 export interface TaskFilters {
@@ -67,6 +94,12 @@ export interface TaskFilters {
   unassigned?: boolean;
   priority?: Array<'normal' | 'high' | 'urgent'>;
   createdBy?: number[];
+  /** Matches tasks on these structures or anywhere below them. */
+  structureIds?: number[];
+  noStructure?: boolean;
+  actionIds?: number[];
+  noAction?: boolean;
+  stages?: TaskStage[];
   q?: string;
   createdFrom?: string;
   createdTo?: string;
@@ -87,6 +120,7 @@ const escapeLike = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
 const endOfDay = (d: string) => sql`(${d}::date + interval '1 day')`;
 
 export async function listTasks(user: AuthUser, f: TaskFilters) {
+  const tree = await loadStructureTree();
   const where: Array<SQL | undefined> = [visibleTasksCondition(user)];
 
   switch (f.view) {
@@ -113,6 +147,27 @@ export async function listTasks(user: AuthUser, f: TaskFilters) {
   }
   if (f.priority?.length) where.push(inArray(t.priority, f.priority));
   if (f.createdBy?.length) where.push(inArray(t.createdBy, f.createdBy));
+  if (f.structureIds?.length || f.noStructure) {
+    where.push(
+      or(
+        f.structureIds?.length ? inArray(t.structureId, withDescendants(tree, f.structureIds)) : undefined,
+        f.noStructure ? isNull(t.structureId) : undefined,
+      ),
+    );
+  }
+  if (f.stages?.length) {
+    const byStage: Record<TaskStage, SQL | undefined> = {
+      new: and(eq(t.status, 'pending'), isNull(t.assignedTo)),
+      assigned: and(eq(t.status, 'pending'), isNotNull(t.assignedTo), isNull(t.acknowledgedAt), isNull(t.startedAt)),
+      acknowledged: and(eq(t.status, 'pending'), isNotNull(t.acknowledgedAt), isNull(t.startedAt)),
+      in_progress: and(eq(t.status, 'pending'), isNotNull(t.startedAt)),
+      completed: eq(t.status, 'completed'),
+    };
+    where.push(or(...f.stages.map((s) => byStage[s])));
+  }
+  if (f.actionIds?.length || f.noAction) {
+    where.push(or(f.actionIds?.length ? inArray(t.actionId, f.actionIds) : undefined, f.noAction ? isNull(t.actionId) : undefined));
+  }
   if (f.createdFrom) where.push(gte(t.createdAt, sql`${f.createdFrom}::date`));
   if (f.createdTo) where.push(lt(t.createdAt, endOfDay(f.createdTo)));
   if (f.dueFrom) where.push(gte(t.dueDate, f.dueFrom));
@@ -132,11 +187,19 @@ export async function listTasks(user: AuthUser, f: TaskFilters) {
   const q = f.q?.trim();
   if (q) {
     const pattern = `%${escapeLike(q)}%`;
+    // A structure match also finds tasks filed under its children ("parent structure" search).
+    const needle = q.toLowerCase();
+    const structureHits = withDescendants(
+      tree,
+      tree.rows.filter((s) => s.name.toLowerCase().includes(needle)).map((s) => s.id),
+    );
     where.push(
       or(
         ilike(t.title, pattern),
         ilike(t.description, pattern),
         ilike(schema.sections.name, pattern),
+        ilike(schema.taskActions.name, pattern),
+        structureHits.length ? inArray(t.structureId, structureHits) : undefined,
         ilike(assignee.name, pattern),
         ilike(creator.name, pattern),
         exists(
@@ -172,13 +235,14 @@ export async function listTasks(user: AuthUser, f: TaskFilters) {
       .select({ total: sql<number>`count(*)::int` })
       .from(t)
       .leftJoin(schema.sections, eq(schema.sections.id, t.sectionId))
+      .leftJoin(schema.taskActions, eq(schema.taskActions.id, t.actionId))
       .leftJoin(assignee, eq(assignee.id, t.assignedTo))
       .leftJoin(creator, eq(creator.id, t.createdBy))
       .where(condition),
   ]);
 
   return {
-    data: rows.map((r) => withPermissions(user, r)),
+    data: rows.map((r) => withPermissions(user, withContext(tree, r))),
     meta: { total, page: f.page, pageSize: f.pageSize, hasMore: offset + rows.length < total },
   };
 }

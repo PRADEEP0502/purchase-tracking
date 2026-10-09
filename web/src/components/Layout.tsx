@@ -25,6 +25,7 @@ import { useDashboard, useSections } from '../lib/queries';
 import { useLiveUpdates } from '../lib/live';
 import { useAppState } from './app-state';
 import { NotificationsButton } from './Notifications';
+import { AlertCenter, AwaitingAckBar } from './AlertCenter';
 import { SectionIcon } from './task-bits';
 import { TaskFormDialog } from './TaskForm';
 import { TaskPanel } from './TaskPanel';
@@ -285,6 +286,7 @@ export function Layout() {
         </header>
 
         <main className="min-h-0 flex-1 overflow-y-auto pb-24 md:pb-8">
+          <AwaitingAckBar />
           <Outlet />
         </main>
       </div>
@@ -293,6 +295,7 @@ export function Layout() {
       <TaskPanel />
       <TaskFormDialog />
       <VoiceTaskDialog />
+      <AlertCenter />
     </div>
   );
 }

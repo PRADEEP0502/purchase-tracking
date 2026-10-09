@@ -1,7 +1,9 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { Bell, CheckCheck } from 'lucide-react';
 import { api } from '../lib/api';
-import { cx, relative } from '../lib/format';
+import { cx, fmtDateOnly, relative } from '../lib/format';
+import { ALERT_KINDS, alertTitle } from '../lib/alerts';
+import { ActionBadge, PriorityBadge, StructurePath } from './task-bits';
 import { useNotifications } from '../lib/queries';
 import { useAppState } from './app-state';
 import { Popover } from './Popover';
@@ -64,9 +66,35 @@ export function NotificationsButton({ className }: { className?: string }) {
                       }}
                       className={cx('flex w-full gap-3 px-4 py-3 text-left hover:bg-subtle', !item.readAt && 'bg-accent-soft/40')}
                     >
-                      <span className={cx('mt-1.5 size-2 shrink-0 rounded-full', item.readAt ? 'bg-transparent' : item.type === 'urgent' ? 'bg-urgent' : 'bg-accent')} />
+                      <span
+                        className={cx(
+                          'mt-1.5 size-2 shrink-0 rounded-full',
+                          item.readAt ? 'bg-transparent' : item.level === 'urgent' || item.type === 'urgent' ? 'bg-urgent' : item.level === 'high' ? 'bg-high' : 'bg-accent',
+                        )}
+                      />
                       <span className="min-w-0 flex-1">
-                        <span className="block text-[13px] leading-snug text-ink">{item.message}</span>
+                        {ALERT_KINDS.has(item.type) && item.data?.label ? (
+                          // Rich assignment / reminder notification
+                          <>
+                            <span className={cx('block text-[11.5px] font-semibold tracking-wide uppercase', item.level === 'urgent' ? 'text-urgent' : 'text-ink-3')}>
+                              {alertTitle({ kind: item.type, level: item.level })}
+                            </span>
+                            <span className="mt-0.5 block text-[13.5px] leading-snug font-semibold text-ink">{item.data.label}</span>
+                            {(!!item.data.action || !!item.data.structurePath?.length) && (
+                              <span className="mt-1 flex min-w-0 items-center gap-2 text-xs">
+                                <ActionBadge name={item.data.action} />
+                                <StructurePath path={item.data.structurePath ?? []} />
+                              </span>
+                            )}
+                            <span className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-xs text-ink-2">
+                              {item.data.priority && item.data.priority !== 'normal' && <PriorityBadge priority={item.data.priority} />}
+                              {item.data.assignedBy && <span>By {item.data.assignedBy}</span>}
+                              {item.data.dueDate && <span>Due {fmtDateOnly(item.data.dueDate)}</span>}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="block text-[13px] leading-snug text-ink">{item.message}</span>
+                        )}
                         <span className="mt-0.5 block text-xs text-ink-3">{relative(item.createdAt)}</span>
                       </span>
                     </button>

@@ -8,7 +8,7 @@ import { AddRow, ListCard, PageHeader, Panel } from '../components/Page';
 import { SectionIcon } from '../components/task-bits';
 import { TaskList } from '../components/TaskList';
 import { Button, EmptyState, Input, Segmented } from '../components/ui';
-import { useSections } from '../lib/queries';
+import { useDashboard, useSections } from '../lib/queries';
 
 function useTotal() {
   const [total, setTotal] = useState<number | undefined>();
@@ -35,11 +35,12 @@ export function InboxPage() {
   );
 }
 
-type MyTab = 'today' | 'upcoming' | 'pending' | 'completed';
+type MyTab = 'ack' | 'today' | 'upcoming' | 'pending' | 'completed';
 
 export function MyTasksPage() {
   const [params, setParams] = useSearchParams();
-  const tab = (['today', 'upcoming', 'pending', 'completed'].includes(params.get('tab') ?? '') ? params.get('tab') : 'pending') as MyTab;
+  const tab = (['ack', 'today', 'upcoming', 'pending', 'completed'].includes(params.get('tab') ?? '') ? params.get('tab') : 'pending') as MyTab;
+  const dash = useDashboard();
   const [total, onTotal] = useTotal();
   const setTab = (t: MyTab) =>
     setParams((p) => {
@@ -49,6 +50,7 @@ export function MyTasksPage() {
     });
 
   const query = {
+    ack: { view: 'mine' as const, stage: ['assigned'] },
     today: { view: 'mine' as const, due: 'today' as const },
     upcoming: { view: 'mine' as const, due: 'upcoming' as const },
     pending: { view: 'mine' as const, status: ['pending'] },
@@ -56,6 +58,7 @@ export function MyTasksPage() {
   }[tab];
 
   const empty = {
+    ack: { icon: <CheckCircle2 className="size-5" />, title: 'Nothing waiting', body: 'New assignments appear here until you mark them as received.' },
     today: { icon: <PartyPopper className="size-5" />, title: 'Nothing due today', body: 'Tasks due today or overdue will show here.' },
     upcoming: { icon: <UserRoundCheck className="size-5" />, title: 'No upcoming due dates', body: 'Tasks assigned to you with a future due date appear here.' },
     pending: { icon: <PartyPopper className="size-5" />, title: 'No pending purchase tasks.', body: '🎉 Everything is completed.' },
@@ -69,6 +72,7 @@ export function MyTasksPage() {
           value={tab}
           onChange={setTab}
           options={[
+            ...(dash.data?.counts.awaitingAck || tab === 'ack' ? [{ value: 'ack' as const, label: 'New for me', count: dash.data?.counts.awaitingAck }] : []),
             { value: 'today', label: 'Today' },
             { value: 'upcoming', label: 'Upcoming' },
             { value: 'pending', label: 'Pending' },
@@ -199,7 +203,7 @@ export function CompletedPage() {
               <Input type="date" value={custom.to} min={custom.from || undefined} onChange={(e) => update('to', e.target.value)} className="w-auto" aria-label="To date" />
             </div>
           )}
-          <FilterBar hide={['status', 'due', 'created']} />
+          <FilterBar hide={['status', 'stage', 'due', 'created']} />
         </div>
       </PageHeader>
       <ListCard>

@@ -121,3 +121,68 @@ export function TaskCheck({
     </button>
   );
 }
+
+/**
+ * Tones for the default actions, matched by name. Renamed or custom actions use the neutral
+ * style, so admins can add any action without a code change.
+ */
+const ACTION_TONES: Record<string, string> = {
+  purchase: 'bg-accent-soft text-accent',
+  repair: 'bg-high-soft text-high',
+  replacement: 'bg-violet-soft text-violet',
+  maintenance: 'bg-done-soft text-done',
+  inspection: 'bg-teal-soft text-teal',
+  service: 'bg-teal-soft text-teal',
+};
+
+export function ActionBadge({ name, className }: { name: string | null | undefined; className?: string }) {
+  if (!name) return null;
+  return (
+    <span
+      className={cx(
+        'inline-flex max-w-[160px] shrink-0 items-center gap-1 truncate rounded px-1.5 py-px text-[11.5px] leading-[18px] font-semibold',
+        ACTION_TONES[name.trim().toLowerCase()] ?? 'bg-subtle text-ink-2',
+        className,
+      )}
+    >
+      <span className="size-1.5 shrink-0 rounded-full bg-current opacity-70" />
+      {name}
+    </span>
+  );
+}
+
+/** Structure context, e.g. "Parent › Child". Never part of the task title. */
+export function StructurePath({ path, className }: { path: string[]; className?: string }) {
+  if (!path.length) return null;
+  return (
+    <span className={cx('inline-flex min-w-0 items-center gap-1 text-ink-2', className)} title={path.join(' › ')}>
+      <Boxes className="size-3.5 shrink-0 text-ink-3" strokeWidth={1.8} />
+      <span className="truncate">
+        {path.map((p, i) => (
+          <span key={i}>
+            {i > 0 && <span className="px-1 text-ink-3">›</span>}
+            <span className={i === path.length - 1 ? 'font-medium text-ink' : undefined}>{p}</span>
+          </span>
+        ))}
+      </span>
+    </span>
+  );
+}
+
+const STAGE: Record<string, { label: string; tone: string } | undefined> = {
+  assigned: { label: 'Not received yet', tone: 'bg-high-soft text-high' },
+  acknowledged: { label: 'Received', tone: 'bg-accent-soft text-accent' },
+  in_progress: { label: 'In progress', tone: 'bg-violet-soft text-violet' },
+};
+
+/** Work stage chip for open, assigned tasks (nothing for new or completed tasks). */
+export function StageBadge({ stage, compact }: { stage: string; compact?: boolean }) {
+  const s = STAGE[stage];
+  if (!s) return null;
+  return (
+    <span className={cx('inline-flex items-center gap-1 rounded px-1.5 py-px text-xs font-medium', s.tone)}>
+      {stage === 'assigned' && <span className="size-1.5 animate-pulse rounded-full bg-current" />}
+      {compact && stage === 'assigned' ? 'Not received' : s.label}
+    </span>
+  );
+}

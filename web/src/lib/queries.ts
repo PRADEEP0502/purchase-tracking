@@ -8,6 +8,8 @@ import type {
   Priority,
   Section,
   Task,
+  TaskAction,
+  TaskStructure,
   TaskDetail,
   TaskPage,
   ThreadItem,
@@ -21,6 +23,9 @@ export interface TaskQuery {
   assignee?: Array<number | 'me' | 'none'>;
   priority?: Priority[];
   createdBy?: Array<number | 'me'>;
+  structure?: Array<number | 'none'>;
+  stage?: string[];
+  action?: Array<number | 'none'>;
   q?: string;
   createdFrom?: string;
   createdTo?: string;
@@ -91,6 +96,22 @@ export function useSections(includeInactive = false) {
   });
 }
 
+export function useStructures(includeInactive = false) {
+  return useQuery({
+    queryKey: ['structures', includeInactive],
+    queryFn: () => api.get<TaskStructure[]>(`/structures${includeInactive ? '?all=1' : ''}`).then((r) => r.data),
+    staleTime: 60_000,
+  });
+}
+
+export function useActions(includeInactive = false) {
+  return useQuery({
+    queryKey: ['actions', includeInactive],
+    queryFn: () => api.get<TaskAction[]>(`/actions${includeInactive ? '?all=1' : ''}`).then((r) => r.data),
+    staleTime: 60_000,
+  });
+}
+
 export function useUsers(includeInactive = false) {
   return useQuery({
     queryKey: ['users', includeInactive],
@@ -128,6 +149,8 @@ export interface TaskInput {
   unit: string;
   description: string | null;
   sectionId: number | null;
+  structureId: number | null;
+  actionId: number | null;
   assignedTo: number | null;
   priority: Priority;
   dueDate: string | null;
@@ -165,7 +188,7 @@ export function useUpdateTask(id: number) {
 export function useTaskAction() {
   const invalidate = useInvalidateTasks();
   return useMutation({
-    mutationFn: ({ id, action }: { id: number; action: 'close' | 'reopen' | 'delete' }) =>
+    mutationFn: ({ id, action }: { id: number; action: 'close' | 'reopen' | 'delete' | 'acknowledge' | 'start' }) =>
       action === 'delete' ? api.del(`/tasks/${id}`) : api.post<Task>(`/tasks/${id}/${action}`),
     onSuccess: (_d, { id }) => invalidate(id),
   });

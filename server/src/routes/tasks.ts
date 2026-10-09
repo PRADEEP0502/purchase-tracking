@@ -1,16 +1,18 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { z } from 'zod';
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import { config } from '../config.js';
 import { parse, idParam, badRequest, notFound, forbidden } from '../lib/http.js';
 import { loadVisibleTask, taskPermissions, assertCan } from '../lib/permissions.js';
-import { logActivity, notify, sectionMemberIds, adminIds } from '../lib/activity.js';
+import { logActivity, notify, sectionMemberIds, adminIds, clearAlerts } from '../lib/activity.js';
+import { alertDetails, sendAssignmentAlert } from '../services/assignment.js';
 import { broadcast } from '../lib/events.js';
 import { todayISO } from '../lib/dates.js';
 import { validateDocument, validateAudio, saveFile, deleteFile, safeFileName } from '../lib/storage.js';
 import { getTaskRow, listTasks, withPermissions } from '../services/tasks.js';
+import { loadStructureTree, structureChain, structurePath } from '../services/structures.js';
 
 export const tasksRouter = Router();
 
@@ -42,6 +44,9 @@ const listQuery = z.object({
   assignee: csvInts,
   priority: csvEnum(['normal', 'high', 'urgent']),
   createdBy: csvInts,
+  structure: csvInts,
+  action: csvInts,
+  stage: csvEnum(['new', 'assigned', 'acknowledged', 'in_progress', 'completed']),
   q: z.string().max(100).optional(),
   createdFrom: isoDate.optional(),
   createdTo: isoDate.optional(),
@@ -58,11 +63,13 @@ const toIds = (values: string[], meId: number) =>
   values.map((v) => (v === 'me' ? meId : Number(v))).filter((n) => Number.isInteger(n) && n > 0);
 
 const taskFields = {
-  title: z.string().trim().min(1, 'Enter what needs to be purchased.').max(200),
+  title: z.string().trim().min(1, 'Enter what needs to be done.').max(200),
   quantity: z.coerce.number().positive('Quantity must be more than 0.').max(1_000_000),
   unit: z.string().trim().min(1).max(20),
   description: z.string().trim().max(4000).nullable(),
   sectionId: z.number().int().positive().nullable(),
+  structureId: z.number().int().positive().nullable(),
+  actionId: z.number().int().positive().nullable(),
   assignedTo: z.number().int().positive().nullable(),
   priority: z.enum(['normal', 'high', 'urgent']),
   dueDate: isoDate.nullable(),
@@ -73,6 +80,8 @@ const createSchema = z.object({
   unit: taskFields.unit.default('Nos'),
   description: taskFields.description.optional(),
   sectionId: taskFields.sectionId.optional(),
+  structureId: taskFields.structureId.optional(),
+  actionId: taskFields.actionId.optional(),
   assignedTo: taskFields.assignedTo.optional(),
   priority: taskFields.priority.default('normal'),
   dueDate: taskFields.dueDate.optional(),
@@ -94,6 +103,48 @@ async function assertActiveUser(id: number | null | undefined) {
   return u;
 }
 
+async function assertActiveStructure(id: number | null | undefined) {
+  if (!id) return null;
+  // The structure and every structure above it must be active.
+  const chain = structureChain(await loadStructureTree(), id);
+  if (!chain.length || chain[chain.length - 1].id !== id || chain.some((s) => !s.isActive)) {
+    throw badRequest('Selected structure is not available.', { structureId: 'Choose another structure.' });
+  }
+  return chain[chain.length - 1];
+}
+
+async function assertActiveAction(id: number | null | undefined) {
+  if (!id) return null;
+  const [a] = await db.select().from(schema.taskActions).where(eq(schema.taskActions.id, id));
+  if (!a || !a.isActive) throw badRequest('Selected action is not available.', { actionId: 'Choose another action.' });
+  return a;
+}
+
+async function actionName(id: number | null): Promise<string | null> {
+  if (!id) return null;
+  const [a] = await db.select({ name: schema.taskActions.name }).from(schema.taskActions).where(eq(schema.taskActions.id, id));
+  return a?.name ?? null;
+}
+
+/** Fields that start a fresh assignment. Self-assignment counts as acknowledged immediately. */
+function assignmentFields(assigneeId: number | null, actorId: number) {
+  const now = new Date();
+  const self = assigneeId !== null && assigneeId === actorId;
+  return {
+    assignedAt: assigneeId ? now : null,
+    acknowledgedAt: self ? now : null,
+    acknowledgedBy: self ? actorId : null,
+    startedAt: null,
+    reminderCount: 0,
+    lastReminderAt: null,
+  };
+}
+
+async function userName(id: number): Promise<string | null> {
+  const [u] = await db.select({ name: schema.users.name }).from(schema.users).where(eq(schema.users.id, id));
+  return u?.name ?? null;
+}
+
 const label = (task: { title: string; quantity: number; unit: string }) =>
   `${task.title} – ${Number(task.quantity)} ${task.unit}`;
 
@@ -113,6 +164,11 @@ tasksRouter.get('/', async (req, res) => {
     unassigned: q.assignee.includes('none'),
     priority: q.priority,
     createdBy: toIds(q.createdBy, user.id),
+    structureIds: toIds(q.structure, user.id),
+    noStructure: q.structure.includes('none'),
+    actionIds: toIds(q.action, user.id),
+    noAction: q.action.includes('none'),
+    stages: q.stage,
     q: q.q,
     createdFrom: q.createdFrom,
     createdTo: q.createdTo,
@@ -133,6 +189,8 @@ tasksRouter.post('/', async (req, res) => {
   const input = parse(createSchema, req.body);
   const section = await assertActiveSection(input.sectionId);
   const assignee = await assertActiveUser(input.assignedTo);
+  const structure = await assertActiveStructure(input.structureId);
+  const action = await assertActiveAction(input.actionId);
 
   const [task] = await db
     .insert(schema.purchaseTasks)
@@ -142,17 +200,25 @@ tasksRouter.post('/', async (req, res) => {
       unit: input.unit,
       description: input.description || null,
       sectionId: section?.id ?? null,
+      structureId: structure?.id ?? null,
+      actionId: action?.id ?? null,
       assignedTo: assignee?.id ?? null,
       priority: input.priority,
       dueDate: input.dueDate ?? null,
       createdBy: user.id,
+      ...assignmentFields(assignee?.id ?? null, user.id),
     })
     .returning();
 
-  await logActivity(task.id, user.id, 'created', { title: label(task), via: req.get('x-jpm-source') === 'voice' ? 'voice' : 'form' });
+  await logActivity(task.id, user.id, 'created', {
+    title: label(task),
+    via: req.get('x-jpm-source') === 'voice' ? 'voice' : 'form',
+    action: action?.name ?? null,
+    structure: structure ? structurePath(await loadStructureTree(), structure.id) : [],
+  });
   if (assignee) {
     await logActivity(task.id, user.id, 'assigned', { to: assignee.id, toName: assignee.name });
-    await notify([assignee.id], user.id, task.id, 'assigned', `${label(task)} was assigned to you by ${user.name}.`);
+    await sendAssignmentAlert(task, assignee.id, user);
   }
   if (task.priority === 'urgent') {
     const recipients = section ? await sectionMemberIds(section.id) : await adminIds(user.id);
@@ -161,7 +227,7 @@ tasksRouter.post('/', async (req, res) => {
       user.id,
       task.id,
       'urgent',
-      `Urgent purchase: ${label(task)}${section ? ` for ${section.name}` : ''}.`,
+      `Urgent ${action ? action.name.toLowerCase() : 'task'}: ${label(task)}${section ? ` for ${section.name}` : ''}.`,
     );
   }
 
@@ -214,6 +280,10 @@ tasksRouter.patch('/:id', async (req, res) => {
 
   if ('sectionId' in input && input.sectionId !== task.sectionId) await assertActiveSection(input.sectionId);
   const newAssignee = assigning ? await assertActiveUser(input.assignedTo) : null;
+  const structureChanging = 'structureId' in input && input.structureId !== task.structureId;
+  const actionChanging = 'actionId' in input && input.actionId !== task.actionId;
+  if (structureChanging) await assertActiveStructure(input.structureId);
+  if (actionChanging) await assertActiveAction(input.actionId);
 
   const changed = (Object.keys(input) as Array<keyof typeof input>).filter((k) => {
     const before = task[k as keyof typeof task];
@@ -226,20 +296,59 @@ tasksRouter.patch('/:id', async (req, res) => {
 
   const [updated] = await db
     .update(schema.purchaseTasks)
-    .set({ ...input, description: input.description === '' ? null : input.description, updatedAt: new Date() })
+    .set({
+      ...input,
+      description: input.description === '' ? null : input.description,
+      // A new assignee starts a fresh assignment: acknowledgement, start and reminders reset.
+      ...(assigning ? assignmentFields(newAssignee?.id ?? null, user.id) : {}),
+      updatedAt: new Date(),
+    })
     .where(eq(schema.purchaseTasks.id, task.id))
     .returning();
 
-  const otherChanges = changed.filter((k) => k !== 'assignedTo');
+  const specific = ['assignedTo', 'structureId', 'actionId', 'priority', 'dueDate'];
+  const otherChanges = changed.filter((k) => !specific.includes(k));
   if (otherChanges.length) await logActivity(task.id, user.id, 'updated', { fields: otherChanges });
+  if (changed.includes('priority')) await logActivity(task.id, user.id, 'priority_changed', { from: task.priority, to: updated.priority });
+  if (changed.includes('dueDate')) await logActivity(task.id, user.id, 'due_date_changed', { from: task.dueDate, to: updated.dueDate });
+  if (structureChanging) {
+    const tree = await loadStructureTree();
+    await logActivity(task.id, user.id, 'structure_changed', {
+      from: structurePath(tree, task.structureId),
+      to: structurePath(tree, updated.structureId),
+    });
+  }
+  if (actionChanging) {
+    await logActivity(task.id, user.id, 'action_changed', { from: await actionName(task.actionId), to: await actionName(updated.actionId) });
+  }
   if (assigning) {
-    await logActivity(task.id, user.id, 'assigned', { to: newAssignee?.id ?? null, toName: newAssignee?.name ?? null });
-    if (newAssignee) {
-      await notify([newAssignee.id], user.id, task.id, 'assigned', `${label(updated)} was assigned to you by ${user.name}.`);
+    const previous = task.assignedTo ? await userName(task.assignedTo) : null;
+    if (task.assignedTo) {
+      await logActivity(task.id, user.id, 'reassigned', {
+        from: task.assignedTo,
+        fromName: previous,
+        to: newAssignee?.id ?? null,
+        toName: newAssignee?.name ?? null,
+      });
+      // The previous assignee's alarms/reminders for this task stop; they get a quiet note.
+      await clearAlerts(task.id, task.assignedTo);
+      await notify(
+        [task.assignedTo],
+        user.id,
+        task.id,
+        'unassigned',
+        newAssignee ? `${user.name} reassigned ${label(updated)} to ${newAssignee.name}.` : `${user.name} removed you from ${label(updated)}.`,
+      );
+    } else {
+      await logActivity(task.id, user.id, 'assigned', { to: newAssignee?.id ?? null, toName: newAssignee?.name ?? null });
     }
+    if (newAssignee) await sendAssignmentAlert(updated, newAssignee.id, user, !!task.assignedTo);
   }
   if ('priority' in input && input.priority === 'urgent' && task.priority !== 'urgent' && updated.assignedTo && !assigning) {
-    await notify([updated.assignedTo], user.id, task.id, 'urgent', `${label(updated)} was marked urgent.`);
+    await notify([updated.assignedTo], user.id, task.id, 'urgent', `${label(updated)} was marked urgent.`, {
+      level: 'urgent',
+      data: await alertDetails(updated, user.name),
+    });
   }
 
   broadcast({ type: 'task.changed', taskId: task.id });
@@ -277,7 +386,51 @@ tasksRouter.post('/:id/close', async (req, res) => {
   if (!updated) throw badRequest('This task is already closed.');
 
   await logActivity(task.id, user.id, 'closed');
+  await clearAlerts(task.id, task.assignedTo);
   await notify([task.createdBy, task.assignedTo], user.id, task.id, 'closed', `${user.name} closed ${label(task)}.`);
+  broadcast({ type: 'task.changed', taskId: task.id });
+  res.json({ data: withPermissions(user, (await getTaskRow(task.id))!) });
+});
+
+/** The assignee confirms they have seen the assignment. Stops alarms and reminders. */
+tasksRouter.post('/:id/acknowledge', async (req, res) => {
+  const user = req.user!;
+  const task = await loadVisibleTask(user, idParam(req));
+  if (task.assignedTo !== user.id) throw forbidden('Only the assigned person can mark this task as received.');
+  if (task.status !== 'pending') throw badRequest('This task is already closed.');
+
+  const [updated] = await db
+    .update(schema.purchaseTasks)
+    .set({ acknowledgedAt: new Date(), acknowledgedBy: user.id, updatedAt: new Date() })
+    // Conditional on the same assignment, so a concurrent reassignment is not acknowledged by mistake.
+    .where(and(eq(schema.purchaseTasks.id, task.id), eq(schema.purchaseTasks.assignedTo, user.id), isNull(schema.purchaseTasks.acknowledgedAt)))
+    .returning();
+  if (updated) {
+    await logActivity(task.id, user.id, 'acknowledged');
+    await notify([task.createdBy], user.id, task.id, 'acknowledged', `${user.name} received ${label(task)}.`);
+  }
+  await clearAlerts(task.id, user.id);
+  broadcast({ type: 'task.changed', taskId: task.id });
+  res.json({ data: withPermissions(user, (await getTaskRow(task.id))!) });
+});
+
+/** Marks work as started (in progress). Starting also acknowledges the assignment. */
+tasksRouter.post('/:id/start', async (req, res) => {
+  const user = req.user!;
+  const task = await loadVisibleTask(user, idParam(req));
+  assertCan(taskPermissions(user, task), 'start', 'Only the assigned person or an admin can start this task.');
+
+  const now = new Date();
+  const acknowledging = !task.acknowledgedAt && task.assignedTo === user.id;
+  await db
+    .update(schema.purchaseTasks)
+    .set({ startedAt: now, updatedAt: now, ...(acknowledging ? { acknowledgedAt: now, acknowledgedBy: user.id } : {}) })
+    .where(eq(schema.purchaseTasks.id, task.id));
+  if (acknowledging) {
+    await logActivity(task.id, user.id, 'acknowledged');
+    await clearAlerts(task.id, user.id);
+  }
+  await logActivity(task.id, user.id, 'started');
   broadcast({ type: 'task.changed', taskId: task.id });
   res.json({ data: withPermissions(user, (await getTaskRow(task.id))!) });
 });

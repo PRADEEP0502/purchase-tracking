@@ -9,7 +9,7 @@ import { forbidden, notFound } from './http.js';
  * Visibility for normal users: tasks they created, tasks assigned to them,
  * and tasks in sections they are a member of. Admins see everything.
  */
-type TaskRef = Pick<schema.PurchaseTask, 'id' | 'createdBy' | 'assignedTo' | 'sectionId' | 'status'>;
+type TaskRef = Pick<schema.PurchaseTask, 'id' | 'createdBy' | 'assignedTo' | 'sectionId' | 'status' | 'acknowledgedAt' | 'startedAt'>;
 
 const isAdmin = (u: AuthUser) => u.role === 'admin';
 
@@ -52,6 +52,9 @@ export function taskPermissions(user: AuthUser, task: TaskRef) {
     assign: admin || (creator && task.status === 'pending'),
     close: task.status === 'pending' && (admin || assignee),
     reopen: task.status === 'completed' && admin,
+    /** Only the assignee confirms they have seen their own assignment. */
+    acknowledge: task.status === 'pending' && assignee && !task.acknowledgedAt,
+    start: task.status === 'pending' && !!task.assignedTo && !task.startedAt && (assignee || admin),
     delete: admin,
     comment: true,
   };

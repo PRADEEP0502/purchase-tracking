@@ -220,6 +220,8 @@ export function Dialog({
     if (!open) return;
     lastFocus.current = document.activeElement;
     const onKey = (e: KeyboardEvent) => {
+      // An open dropdown inside the dialog handles Escape itself.
+      if (e.key === 'Escape' && document.querySelector('[data-popover]')) return;
       if (e.key === 'Escape' && dismissable) {
         e.stopPropagation();
         onClose();

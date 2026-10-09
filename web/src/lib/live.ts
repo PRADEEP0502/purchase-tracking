@@ -44,7 +44,21 @@ export function useLiveUpdates(enabled: boolean) {
         schedule(JSON.stringify(['tasks']));
       });
       es.addEventListener('sections.changed', () => schedule(JSON.stringify(['sections'])));
-      es.addEventListener('notification', () => schedule(JSON.stringify(['notifications'])));
+      es.addEventListener('catalog.changed', () => {
+        schedule(JSON.stringify(['structures']));
+        schedule(JSON.stringify(['actions']));
+      });
+      es.addEventListener('notification', (e) => {
+        schedule(JSON.stringify(['notifications']));
+        schedule(JSON.stringify(['dashboard']));
+        // Hand the alert to the alarm layer (sound, browser notification, alert card).
+        window.dispatchEvent(new CustomEvent('jpm:alert', { detail: JSON.parse((e as MessageEvent).data) }));
+      });
+      es.addEventListener('alerts.cleared', (e) => {
+        schedule(JSON.stringify(['notifications']));
+        schedule(JSON.stringify(['dashboard']));
+        window.dispatchEvent(new CustomEvent('jpm:alerts-cleared', { detail: JSON.parse((e as MessageEvent).data) }));
+      });
       es.onerror = () => {
         // Browser retries automatically; if the connection is closed (e.g. session expired), back off and reconnect.
         if (es?.readyState === EventSource.CLOSED) {

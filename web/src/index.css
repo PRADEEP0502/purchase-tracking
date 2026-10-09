@@ -28,6 +28,10 @@
   --color-done: var(--done);
   --color-done-soft: var(--done-soft);
   --color-pending: var(--pending);
+  --color-violet: var(--violet);
+  --color-violet-soft: var(--violet-soft);
+  --color-teal: var(--teal);
+  --color-teal-soft: var(--teal-soft);
 
   --animate-in: fade-in 140ms ease-out;
   --animate-panel: panel-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -67,6 +71,10 @@
   --done: #1f8a4c;
   --done-soft: #e6f5ec;
   --pending: #d99a0b;
+  --violet: #7044c4;
+  --violet-soft: #f1ebfc;
+  --teal: #0f7b7b;
+  --teal-soft: #e3f4f3;
   color-scheme: light;
 }
 
@@ -90,6 +98,10 @@
   --done: #4cc47f;
   --done-soft: #183224;
   --pending: #e8b33d;
+  --violet: #b598f5;
+  --violet-soft: #2c2342;
+  --teal: #5cc9c4;
+  --teal-soft: #15302f;
   color-scheme: dark;
 }
 

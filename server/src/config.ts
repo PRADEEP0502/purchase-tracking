@@ -42,4 +42,10 @@ export const config = {
   cookieName: 'jpm_session',
   maxUploadBytes: 10 * 1024 * 1024,
   maxVoiceBytes: 5 * 1024 * 1024,
+  /** How often the server checks for reminders to send (0 disables the scheduler). */
+  reminderCheckSeconds: Number(process.env.REMINDER_CHECK_SECONDS ?? 60),
+  /** Urgent tasks not yet acknowledged are reminded at this interval… */
+  urgentReminderMinutes: Math.max(1, Number(process.env.URGENT_REMINDER_MINUTES ?? 10)),
+  /** …at most this many times, so reminders never loop forever. */
+  urgentReminderMax: Math.max(0, Number(process.env.URGENT_REMINDER_MAX ?? 6)),
 };

@@ -17,6 +17,10 @@ export interface ParseContext {
   users: NamedEntity[];
   /** Known item names (e.g. recent task titles) used to clean up the detected item. */
   items?: string[];
+  /** Active structures (the generic hierarchy); parentId links a child to its parent. */
+  structures?: Array<NamedEntity & { parentId: number | null }>;
+  /** Active actions (Purchase, Repair, …). */
+  actions?: NamedEntity[];
   /** ISO date (yyyy-mm-dd) considered "today". */
   today: string;
 }
@@ -33,7 +37,10 @@ export interface ParsedPurchase {
   priority: Priority;
   dueDate: string | null;
   /** Words that looked like a section/person but did not match any known one. */
-  unmatched: { section?: string; person?: string };
+  /** Deepest matched structure with its full root-first path, or null when not confidently matched. */
+  structure: (NamedEntity & { path: string[] }) | null;
+  action: NamedEntity | null;
+  unmatched: { section?: string; person?: string; structure?: string };
   /** Required fields that could not be detected. */
   missing: Array<'title' | 'quantity' | 'section' | 'assignee'>;
   /** True when title and quantity were both found — still requires user confirmation. */
@@ -207,7 +214,13 @@ interface EntityMatch {
 }
 
 /** Finds the best entity mention over 1–3 token windows, tolerating glued Tanglish suffixes. */
-function findEntity(tokens: Token[], entities: NamedEntity[], threshold: number, allowFirstName: boolean): EntityMatch | null {
+function findEntity(
+  tokens: Token[],
+  entities: NamedEntity[],
+  threshold: number,
+  allowFirstName: boolean,
+  { maxLen = 3, minLen = 1 }: { maxLen?: number; minLen?: number } = {},
+): EntityMatch | null {
   let best: EntityMatch | null = null;
   const names = entities.flatMap((e) => {
     const variants = [{ e, name: e.name }];
@@ -219,9 +232,10 @@ function findEntity(tokens: Token[], entities: NamedEntity[], threshold: number,
   });
 
   for (let start = 0; start < tokens.length; start++) {
-    for (let len = 1; len <= 3 && start + len <= tokens.length; len++) {
+    for (let len = 1; len <= maxLen && start + len <= tokens.length; len++) {
       const window = tokens.slice(start, start + len);
       if (window.some((t) => t.used)) break;
+      if (len < minLen) continue;
       const joined = window.map((t) => t.norm).join('');
       if (!joined || /^\d+$/.test(joined)) continue;
       if (joined.length < 3) {
@@ -267,11 +281,100 @@ function addDays(iso: string, days: number): string {
 
 function matchItem(title: string, items: string[]): string {
   let best = { name: title, score: 0 };
+  const digits = (s: string) => s.replace(/\D/g, '');
   for (const item of items) {
+    // Never swap a part/model number for a different one ("Bearing 6672" is not "Bearing").
+    if (digits(item) !== digits(title)) continue;
     const score = similarity(title, item);
     if (score > best.score) best = { name: item, score };
   }
   return best.score >= 0.84 ? best.name : title;
+}
+
+/**
+ * Spoken aliases for the default actions, keyed by the collapsed action name. They are only
+ * used when an action with that name exists, so renamed or custom actions still work by name.
+ * "Weak" words (need / venum) only imply Purchase when nothing more specific was said.
+ */
+const ACTION_ALIASES: Record<string, { strong: string[]; weak?: string[] }> = {
+  purchase: {
+    strong: ['purchase', 'purchased', 'buy', 'order', 'procure', 'vangu', 'vanganum', 'vangunga', 'vangavum', 'vanunga', 'vaankunka', 'vankunka'],
+    weak: ['need', 'needs', 'needed', 'required', 'require', 'requires', 'want', 'venum', 'vendum', 'veenum', 'veentum', 'vaenum', 'thevai', 'tevai'],
+  },
+  repair: { strong: ['repair', 'repairing', 'rippair', 'ripair', 'fix', 'fixing', 'sari', 'saripannu', 'sariseyya'] },
+  replacement: { strong: ['replace', 'replacing', 'replacement', 'change', 'changing', 'mathu', 'mathanum', 'matranum', 'matru'] },
+  maintenance: { strong: ['maintenance', 'maintain', 'maintaining'] },
+  inspection: { strong: ['inspect', 'inspection', 'check', 'checking', 'chek', 'paru', 'parunga'] },
+  service: { strong: ['service', 'servicing', 'servis', 'sarvis'] },
+  installation: { strong: ['install', 'installation', 'installing', 'fitting'] },
+  modification: { strong: ['modify', 'modification', 'modifying', 'alter', 'alteration'] },
+  folowup: { strong: ['followup', 'follow', 'remind', 'reminder'] },
+};
+
+function findAction(tokens: Token[], actions: NamedEntity[]): { action: NamedEntity; index: number } | null {
+  let weak: { action: NamedEntity; index: number } | null = null;
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t.used || !t.norm) continue;
+    const variants = stripSuffix(t.norm);
+    for (const a of actions) {
+      const key = collapse(a.name);
+      const aliases = ACTION_ALIASES[key];
+      const strong = aliases ? aliases.strong.map(collapse) : [];
+      if (variants.some((v) => v === key || strong.includes(v) || (key.length >= 5 && v.startsWith(key)))) return { action: a, index: i };
+      if (!weak && aliases?.weak?.map(collapse).some((w) => variants.includes(w))) weak = { action: a, index: -1 };
+    }
+  }
+  // Custom actions: tolerate small speech-recognition differences in the name itself.
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t.used || t.norm.length < 4) continue;
+    const hit = actions.find((a) => !ACTION_ALIASES[collapse(a.name)] && similarity(t.norm, a.name) >= 0.86);
+    if (hit) return { action: hit, index: i };
+  }
+  return weak;
+}
+
+type StructureEntity = NamedEntity & { parentId: number | null };
+
+/**
+ * Matches spoken structure names to the hierarchy. Several names may be mentioned
+ * ("<parent> <child>"); the result is the deepest structure whose ancestor chain contains
+ * every mentioned name. If that is not unique (e.g. the same child name under two parents
+ * and no parent was said), nothing is chosen and the user picks manually.
+ */
+function matchStructures(tokens: Token[], structures: StructureEntity[], minLen: number, found: string[]): void {
+  const names = [...new Map(structures.map((s) => [collapse(s.name), { id: 0, name: s.name }])).values()];
+  for (let round = 0; round < 4; round++) {
+    const m = findEntity(tokens, names, 0.86, false, { maxLen: 4, minLen });
+    if (!m) return;
+    for (let i = m.start; i < m.start + m.length; i++) tokens[i].used = true;
+    found.push(collapse(m.entity.name));
+  }
+}
+
+function resolveStructure(structures: StructureEntity[], found: string[]): (NamedEntity & { path: string[] }) | 'ambiguous' | null {
+  if (!found.length) return null;
+  const byId = new Map(structures.map((s) => [s.id, s]));
+  const chainOf = (s: StructureEntity) => {
+    const chain: StructureEntity[] = [];
+    const seen = new Set<number>();
+    for (let cur: StructureEntity | undefined = s; cur && !seen.has(cur.id); cur = cur.parentId ? byId.get(cur.parentId) : undefined) {
+      seen.add(cur.id);
+      chain.unshift(cur);
+    }
+    return chain;
+  };
+  const wanted = new Set(found);
+  const fits = structures
+    .filter((s) => wanted.has(collapse(s.name)))
+    .map((s) => ({ s, chain: chainOf(s) }))
+    .filter(({ chain }) => [...wanted].every((w) => chain.some((c) => collapse(c.name) === w)));
+  if (!fits.length) return 'ambiguous';
+  // Drop a fit when a deeper fit lies below it; anything left over that is unrelated is ambiguous.
+  const best = fits.filter((f) => !fits.some((o) => o !== f && o.chain.includes(f.s)));
+  if (best.length !== 1) return 'ambiguous';
+  return { id: best[0].s.id, name: best[0].s.name, path: best[0].chain.map((c) => c.name) };
 }
 
 export const ruleBasedParser: PurchaseParser = {
@@ -299,7 +402,12 @@ export const ruleBasedParser: PurchaseParser = {
       }
     }
 
-    // 2. Section.
+    // 2. Structures named with several words go first, so "Electrical Panel" is not taken as the Electrical section.
+    const structures = ctx.structures ?? [];
+    const structureNames: string[] = [];
+    if (structures.length) matchStructures(tokens, structures, 2, structureNames);
+
+    // 3. Section.
     const sectionMatch = findEntity(tokens, ctx.sections, 0.8, false);
     const section = sectionMatch?.entity ?? null;
     if (sectionMatch) {
@@ -313,7 +421,20 @@ export const ruleBasedParser: PurchaseParser = {
       }
     }
 
-    // 3. Priority and due date.
+    // 4. Remaining (single-word) structure names, then the action.
+    if (structures.length) matchStructures(tokens, structures, 1, structureNames);
+    const resolved = resolveStructure(structures, structureNames);
+    const structure = resolved && resolved !== 'ambiguous' ? resolved : null;
+    if (resolved === 'ambiguous') {
+      unmatched.structure = structureNames
+        .map((n) => structures.find((s) => collapse(s.name) === n)?.name ?? n)
+        .join(' › ');
+    }
+    const actionHit = ctx.actions?.length ? findAction(tokens, ctx.actions) : null;
+    if (actionHit && actionHit.index >= 0) tokens[actionHit.index].used = true;
+    const action = actionHit?.action ?? null;
+
+    // 5. Priority and due date.
     let priority: Priority = 'normal';
     let dueDate: string | null = null;
     for (let i = 0; i < tokens.length; i++) {
@@ -340,14 +461,17 @@ export const ruleBasedParser: PurchaseParser = {
       }
     }
 
-    // 4. Quantity + unit. Prefer a number followed by a unit.
+    // 6. Quantity + unit. Prefer a number followed by a unit.
     let quantity: number | null = null;
     let unit = 'Nos';
     const numberCandidates: Array<{ i: number; value: number; hasUnit: boolean }> = [];
     tokens.forEach((t, i) => {
       if (t.used) return;
       const value = parseNumber(t, tokens[i + 1]);
-      if (value !== null && value > 0) numberCandidates.push({ i, value, hasUnit: !!UNITS[tokens[i + 1]?.norm ?? ''] });
+      const hasUnit = !!UNITS[tokens[i + 1]?.norm ?? ''];
+      // A long bare number ("bearing 6672") is a part/model number, not a quantity.
+      if (!hasUnit && /^\d{4,}$/.test(t.raw)) return;
+      if (value !== null && value > 0) numberCandidates.push({ i, value, hasUnit });
     });
     const chosen = numberCandidates.find((c) => c.hasUnit) ?? numberCandidates[0];
     if (chosen) {
@@ -359,7 +483,7 @@ export const ruleBasedParser: PurchaseParser = {
       }
     }
 
-    // 5. Item title: whatever meaningful words remain.
+    // 7. Item title: whatever meaningful words remain.
     const itemWords = tokens
       .filter((t) => !t.used && t.norm && !FILLERS.has(t.norm) && !stripSuffix(t.norm).slice(1).some((v) => FILLERS.has(v) && v.length > 3))
       .map((t) => t.raw.replace(/-(ku|kku|la|le|ah|aa)$/i, ''));
@@ -380,6 +504,8 @@ export const ruleBasedParser: PurchaseParser = {
       unit,
       section,
       assignee,
+      structure,
+      action,
       priority,
       dueDate,
       unmatched,

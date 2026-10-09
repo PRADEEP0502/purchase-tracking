@@ -9,6 +9,7 @@ import { addClient } from '../lib/events.js';
 import { filePath } from '../lib/storage.js';
 import { todayISO } from '../lib/dates.js';
 import { ruleBasedParser } from '../voice/parser.js';
+import { loadStructureTree, structureChain } from '../services/structures.js';
 
 const t = schema.purchaseTasks;
 
@@ -32,6 +33,7 @@ dashboardRouter.get('/', async (req, res) => {
         completed: sql<number>`count(*) filter (where ${t.status} = 'completed')::int`,
         overdue: sql<number>`count(*) filter (where ${t.status} = 'pending' and ${t.dueDate} < ${today})::int`,
         mine: sql<number>`count(*) filter (where ${t.status} = 'pending' and ${t.assignedTo} = ${user.id})::int`,
+        awaitingAck: sql<number>`count(*) filter (where ${t.status} = 'pending' and ${t.assignedTo} = ${user.id} and ${t.acknowledgedAt} is null)::int`,
         inbox: sql<number>`count(*) filter (where ${t.status} = 'pending' and (${t.sectionId} is null or ${t.assignedTo} is null))::int`,
         completedToday: sql<number>`count(*) filter (where ${t.status} = 'completed' and ${t.closedAt} >= ${today}::date)::int`,
       })
@@ -99,7 +101,7 @@ notificationsRouter.get('/', async (req, res) => {
   const n = schema.notifications;
   const [rows, [{ unread }]] = await Promise.all([
     db
-      .select({ id: n.id, taskId: n.taskId, type: n.type, message: n.message, readAt: n.readAt, createdAt: n.createdAt })
+      .select({ id: n.id, taskId: n.taskId, type: n.type, message: n.message, level: n.level, data: n.data, readAt: n.readAt, createdAt: n.createdAt })
       .from(n)
       .where(eq(n.userId, userId))
       .orderBy(desc(n.createdAt), desc(n.id))
@@ -130,15 +132,27 @@ voiceRouter.post('/parse', async (req, res) => {
     z.object({ transcript: z.string().trim().min(1, 'Voice could not be understood. Please try again or create the task manually.').max(1000) }),
     req.body,
   );
-  const [sections, users, items] = await Promise.all([
+  const [sections, users, items, tree, actions] = await Promise.all([
     db.select({ id: schema.sections.id, name: schema.sections.name }).from(schema.sections).where(eq(schema.sections.isActive, true)),
     db.select({ id: schema.users.id, name: schema.users.name }).from(schema.users).where(eq(schema.users.isActive, true)),
     db.selectDistinct({ title: t.title }).from(t).limit(500),
+    loadStructureTree(),
+    db
+      .select({ id: schema.taskActions.id, name: schema.taskActions.name })
+      .from(schema.taskActions)
+      .where(eq(schema.taskActions.isActive, true))
+      .orderBy(schema.taskActions.sortOrder),
   ]);
+  // Only structures whose whole chain is active can be selected.
+  const structures = tree.rows
+    .filter((s) => structureChain(tree, s.id).every((a) => a.isActive))
+    .map((s) => ({ id: s.id, name: s.name, parentId: s.parentId }));
   const result = ruleBasedParser.parse(transcript, {
     sections,
     users,
     items: items.map((i) => i.title),
+    structures,
+    actions,
     today: todayISO(),
   });
   res.json({ data: result });

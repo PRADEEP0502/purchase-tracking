@@ -4,6 +4,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { ArrowDown, ArrowUp, Monitor, Moon, PencilLine, Plus, Settings as SettingsIcon, Sun } from 'lucide-react';
 import { useAuth } from '../auth';
+import { ActionSettings, StructureSettings } from './CatalogSettings';
+import { desktopPermission, playAlertSound, requestDesktopPermission, setSoundEnabled, soundEnabled } from '../lib/alerts';
 import { PageHeader, Panel } from '../components/Page';
 import { SECTION_ICONS, SectionIcon } from '../components/task-bits';
 import { Avatar, Button, Dialog, ErrorState, Field, IconButton, Input, Kbd, ListSkeleton, Select, Textarea } from '../components/ui';
@@ -22,13 +24,23 @@ export function SettingsPage() {
   return (
     <Panel>
       <PageHeader title="Settings" icon={<SettingsIcon className="size-5" />}>
-        <nav className="flex gap-5 border-b border-line">
+        <nav className="scroll-thin flex gap-5 overflow-x-auto border-b border-line">
           <NavLink to="/settings" end className={tab}>
             Profile
           </NavLink>
           {admin && (
             <NavLink to="/settings/sections" className={tab}>
               Sections
+            </NavLink>
+          )}
+          {admin && (
+            <NavLink to="/settings/structures" className={tab}>
+              Structures
+            </NavLink>
+          )}
+          {admin && (
+            <NavLink to="/settings/actions" className={tab}>
+              Actions
             </NavLink>
           )}
           {admin && (
@@ -42,6 +54,8 @@ export function SettingsPage() {
         <Routes>
           <Route index element={<ProfileSettings />} />
           <Route path="sections" element={admin ? <SectionSettings /> : <Navigate to="/settings" replace />} />
+          <Route path="structures" element={admin ? <StructureSettings /> : <Navigate to="/settings" replace />} />
+          <Route path="actions" element={admin ? <ActionSettings /> : <Navigate to="/settings" replace />} />
           <Route path="users" element={admin ? <UserSettings /> : <Navigate to="/settings" replace />} />
           <Route path="*" element={<Navigate to="/settings" replace />} />
         </Routes>
@@ -150,6 +164,8 @@ function ProfileSettings() {
         </div>
       </Card>
 
+      <AlertSettings />
+
       <Card title="Change password">
         <form onSubmit={changePassword} className="grid gap-4 sm:grid-cols-2">
           <Field label="Current password" error={errors.currentPassword}>
@@ -187,6 +203,68 @@ function ProfileSettings() {
         </dl>
       </Card>
     </div>
+  );
+}
+
+function AlertSettings() {
+  const [permission, setPermission] = useState(desktopPermission());
+  const [sound, setSound] = useState(soundEnabled());
+  const test = (level: 'normal' | 'high' | 'urgent') => {
+    if (!playAlertSound(level, true)) toast.error('Your browser blocked the sound. Click anywhere on the page and try again.');
+  };
+  return (
+    <Card title="Alerts" description="How you are alerted when a task is assigned to you or needs attention.">
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium">Desktop notifications</p>
+            <p className="text-xs text-ink-3">
+              {permission === 'granted'
+                ? 'On — you are notified even when this tab is in the background.'
+                : permission === 'denied'
+                  ? 'Blocked — allow notifications for this site in your browser settings.'
+                  : permission === 'unsupported'
+                    ? 'Not supported by this browser.'
+                    : 'Off — turn on to be notified when this tab is in the background.'}
+            </p>
+          </div>
+          {permission === 'default' && (
+            <Button size="sm" variant="primary" onClick={async () => setPermission(await requestDesktopPermission())}>
+              Turn on
+            </Button>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
+          <div>
+            <p className="text-sm font-medium">Alert sound</p>
+            <p className="text-xs text-ink-3">A short chime for new assignments; a stronger alarm for urgent tasks. Never repeats on its own.</p>
+          </div>
+          <label className="inline-flex cursor-pointer items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={sound}
+              onChange={(e) => {
+                setSoundEnabled(e.target.checked);
+                setSound(e.target.checked);
+              }}
+              className="size-4 accent-[var(--accent)]"
+            />
+            Play sound
+          </label>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" onClick={() => test('normal')}>
+            Test normal
+          </Button>
+          <Button size="sm" onClick={() => test('high')}>
+            Test high
+          </Button>
+          <Button size="sm" variant="danger" onClick={() => test('urgent')}>
+            Test urgent
+          </Button>
+        </div>
+      </div>
+    </Card>
   );
 }
 

@@ -2,7 +2,8 @@ import { type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { CalendarRange, Check, ChevronDown, X } from 'lucide-react';
 import { cx, fmtDateOnly, PRIORITY_LABEL } from '../lib/format';
-import { useSections, useUsers, type TaskQuery } from '../lib/queries';
+import { useActions, useSections, useStructures, useUsers, type TaskQuery } from '../lib/queries';
+import type { TaskStructure } from '../lib/types';
 import type { Priority } from '../lib/types';
 import { Popover } from './Popover';
 import { Input } from './ui';
@@ -21,12 +22,15 @@ export function useUrlFilters(): { query: TaskQuery; active: number; clear: () =
     assignee: num('assignee'),
     priority: list('priority') as Priority[],
     createdBy: num('createdBy'),
+    structure: num('structure'),
+    action: num('action'),
+    stage: list('stage'),
     createdFrom: params.get('createdFrom') ?? undefined,
     createdTo: params.get('createdTo') ?? undefined,
     dueFrom: params.get('dueFrom') ?? undefined,
     dueTo: params.get('dueTo') ?? undefined,
   };
-  const keys = ['status', 'section', 'assignee', 'priority', 'createdBy', 'createdFrom', 'createdTo', 'dueFrom', 'dueTo'];
+  const keys = ['status', 'stage', 'section', 'structure', 'action', 'assignee', 'priority', 'createdBy', 'createdFrom', 'createdTo', 'dueFrom', 'dueTo'];
   const active = new Set(keys.filter((k) => params.get(k)).map((k) => k.replace(/From|To$/, ''))).size;
   const clear = () =>
     setParams((p) => {
@@ -157,8 +161,33 @@ function DateFilter({ label, prefix }: { label: string; prefix: 'created' | 'due
   );
 }
 
-export function FilterBar({ hide = [] }: { hide?: Array<'status' | 'section' | 'assignee' | 'priority' | 'createdBy' | 'created' | 'due'> }) {
+/** Flatten the hierarchy depth-first so children appear indented under their parent. */
+function treeOptions(list: TaskStructure[]) {
+  const out: Array<{ value: string; label: ReactNode; text: string }> = [];
+  const walk = (parentId: number | null, depth: number, trail: string[]) => {
+    for (const s of list.filter((x) => x.parentId === parentId)) {
+      const path = [...trail, s.name];
+      out.push({
+        value: String(s.id),
+        label: (
+          <span style={{ paddingLeft: depth * 14 }} className={depth ? 'text-ink-2' : 'font-medium'}>
+            {depth > 0 && <span className="mr-1 text-ink-3">└</span>}
+            {s.name}
+          </span>
+        ),
+        text: path.join(' › '),
+      });
+      walk(s.id, depth + 1, path);
+    }
+  };
+  walk(null, 0, []);
+  return out;
+}
+
+export function FilterBar({ hide = [] }: { hide?: Array<'status' | 'stage' | 'section' | 'structure' | 'action' | 'assignee' | 'priority' | 'createdBy' | 'created' | 'due'> }) {
   const sections = useSections();
+  const structures = useStructures();
+  const actions = useActions();
   const users = useUsers();
   const { active, clear } = useUrlFilters();
   const people = (users.data ?? []).map((u) => ({ value: String(u.id), label: u.name, text: u.name }));
@@ -176,11 +205,38 @@ export function FilterBar({ hide = [] }: { hide?: Array<'status' | 'section' | '
           ]}
         />
       )}
+      {show('stage') && (
+        <MultiFilter
+          label="Progress"
+          param="stage"
+          options={[
+            { value: 'new', label: 'New (unassigned)', text: 'New' },
+            { value: 'assigned', label: 'Not received yet', text: 'Not received' },
+            { value: 'acknowledged', label: 'Received', text: 'Received' },
+            { value: 'in_progress', label: 'In progress', text: 'In progress' },
+            { value: 'completed', label: 'Completed', text: 'Completed' },
+          ]}
+        />
+      )}
       {show('section') && (
         <MultiFilter
           label="Section"
           param="section"
           options={[...(sections.data ?? []).map((s) => ({ value: String(s.id), label: s.name, text: s.name })), { value: 'none', label: <span className="italic">No section</span>, text: 'No section' }]}
+        />
+      )}
+      {show('structure') && !!structures.data?.length && (
+        <MultiFilter
+          label="Structure"
+          param="structure"
+          options={[...treeOptions(structures.data), { value: 'none', label: <span className="italic">No structure</span>, text: 'No structure' }]}
+        />
+      )}
+      {show('action') && (
+        <MultiFilter
+          label="Action"
+          param="action"
+          options={[...(actions.data ?? []).map((a) => ({ value: String(a.id), label: a.name, text: a.name })), { value: 'none', label: <span className="italic">No action</span>, text: 'No action' }]}
         />
       )}
       {show('assignee') && <MultiFilter label="Assigned to" param="assignee" options={[...people, { value: 'none', label: <span className="italic">Unassigned</span>, text: 'Unassigned' }]} />}

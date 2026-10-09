@@ -8,7 +8,7 @@ import type { Task } from '../lib/types';
 import { useAppState } from './app-state';
 import { Popover, MenuItem } from './Popover';
 import { Avatar } from './ui';
-import { PriorityBadge, SectionIcon, TaskCheck } from './task-bits';
+import { ActionBadge, PriorityBadge, SectionIcon, StageBadge, StructurePath, TaskCheck } from './task-bits';
 import { useSections } from '../lib/queries';
 
 function AssignMenu({ task }: { task: Task }) {
@@ -95,6 +95,12 @@ export const TaskRow = memo(function TaskRow({ task, showSection = true }: { tas
       />
 
       <div className="min-w-0 flex-1">
+        {(task.actionName || task.structurePath.length > 0) && (
+          <div className={cx('mb-1 flex min-w-0 items-center gap-2 text-[12.5px]', done && 'opacity-60')}>
+            <ActionBadge name={task.actionName} />
+            <StructurePath path={task.structurePath} />
+          </div>
+        )}
         <div className="flex items-baseline gap-2">
           <p className={cx('min-w-0 truncate text-[14.5px] leading-snug font-medium', done ? 'text-ink-3 line-through decoration-ink-3/60' : 'text-ink')}>
             {task.title}
@@ -111,6 +117,7 @@ export const TaskRow = memo(function TaskRow({ task, showSection = true }: { tas
           ) : (
             <>
               <PriorityBadge priority={task.priority} compact />
+              <StageBadge stage={task.stage} compact />
               {due && (
                 <span
                   className={cx(

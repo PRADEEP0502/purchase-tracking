@@ -120,3 +120,73 @@ test('transliteration and phonetic similarity', () => {
   assert.ok(similarity(transliterateTamil('குமார்'), 'Kumar') >= 0.8);
   assert.ok(similarity('cable', 'Lab') < 0.5);
 });
+
+// ---------------------------------------------------------------------------
+// Structures and actions (fixture names only — real values come from the database)
+// ---------------------------------------------------------------------------
+
+const ctx2 = {
+  ...ctx,
+  structures: [
+    { id: 1, name: 'MS', parentId: null },
+    { id: 2, name: '6T Machine', parentId: 1 },
+    { id: 3, name: 'SS-2', parentId: 2 },
+    { id: 4, name: 'SS-3', parentId: 2 },
+    { id: 5, name: 'Boiler', parentId: null },
+    { id: 6, name: 'SS-2', parentId: 5 },
+    { id: 7, name: 'Main Pump', parentId: 2 },
+  ],
+  actions: ['Purchase', 'Repair', 'Replacement', 'Maintenance', 'Inspection', 'Service', 'Installation', 'Modification', 'Follow-up', 'Other'].map(
+    (name, i) => ({ id: i + 1, name }),
+  ),
+};
+const parse2 = (s: string) => ruleBasedParser.parse(s, ctx2);
+
+test('Structure chain + action + part number from the spec example', () => {
+  const r = parse2('MS 6T machine SS-2 bearing 6672 purchase pannanum, Ashok-ku assign pannunga.');
+  assert.deepEqual(r.structure?.path, ['MS', '6T Machine', 'SS-2']);
+  assert.equal(r.structure?.id, 3);
+  assert.equal(r.action?.name, 'Purchase');
+  assert.equal(r.title, 'Bearing 6672');
+  assert.equal(r.quantity, null); // 6672 is a part number, not a quantity
+  assert.equal(r.assignee?.name, 'Ashok');
+});
+
+test('Child name shared by two parents needs the parent to be said', () => {
+  const r = parse2('SS-2 bearing repair pannunga');
+  assert.equal(r.structure, null);
+  assert.equal(r.unmatched.structure, 'SS-2');
+  assert.equal(r.action?.name, 'Repair');
+  assert.equal(r.title, 'Bearing');
+});
+
+test('Parent alone and multi-word child', () => {
+  assert.equal(parse2('Boiler SS-2 valve replace').structure?.id, 6);
+  const r = parse2('6T machine main pump 2 bearing venum');
+  assert.deepEqual(r.structure?.path, ['MS', '6T Machine', 'Main Pump']);
+  assert.equal(r.action?.name, 'Purchase'); // "venum" implies purchase when nothing more specific is said
+  assert.equal(r.quantity, 2);
+  assert.equal(r.title, 'Bearing');
+});
+
+test('No structure or action mentioned leaves them blank', () => {
+  const r = parse2('Electrical-ku 10 meter cable urgent-ah');
+  assert.equal(r.structure, null);
+  assert.equal(r.action, null);
+  assert.equal(r.section?.name, 'Electrical');
+  assert.equal(r.quantity, 10);
+});
+
+test('Section name stays a section when Maintenance is also an action', () => {
+  const r = parse2('Maintenance-ku rendu bearing urgent-ah venum. Ashok-ku assign pannunga.');
+  assert.equal(r.section?.name, 'Maintenance');
+  assert.equal(r.action?.name, 'Purchase');
+  assert.equal(r.title, 'Bearing');
+  assert.equal(r.quantity, 2);
+});
+
+test('Custom action names match by name', () => {
+  const r = ruleBasedParser.parse('6T machine calibration pannunga', { ...ctx2, actions: [...ctx2.actions, { id: 99, name: 'Calibration' }] });
+  assert.equal(r.action?.name, 'Calibration');
+  assert.deepEqual(r.structure?.path, ['MS', '6T Machine']);
+});

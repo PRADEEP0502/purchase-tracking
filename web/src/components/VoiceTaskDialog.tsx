@@ -3,10 +3,11 @@ import { toast } from 'sonner';
 import { AlertTriangle, Keyboard, Mic, RotateCcw, Square } from 'lucide-react';
 import { api, errorMessage } from '../lib/api';
 import { cx, PRIORITY_LABEL, taskLabel, UNITS, fmtDateOnly } from '../lib/format';
-import { useCreateTask, useSections, useUsers, type TaskInput } from '../lib/queries';
+import { useActions, useCreateTask, useSections, useUsers, type TaskInput } from '../lib/queries';
 import { SPEECH_LANGUAGES, useSpeech } from '../lib/speech';
 import type { ParsedPurchase, Priority } from '../lib/types';
 import { useAppState } from './app-state';
+import { StructurePicker } from './StructurePicker';
 import { Button, Dialog, Input, Select, Spinner, Textarea } from './ui';
 
 type Step = 'listen' | 'parsing' | 'review';
@@ -25,6 +26,7 @@ export function VoiceTaskDialog() {
   const speech = useSpeech();
   const sections = useSections();
   const users = useUsers();
+  const actions = useActions();
   const create = useCreateTask();
   const [lang, setLang] = useState(savedLang);
   const [step, setStep] = useState<Step>('listen');
@@ -58,9 +60,13 @@ export function VoiceTaskDialog() {
       setParsed(data);
       setForm({
         title: data.title ?? '',
-        quantity: data.quantity ?? NaN,
+        // Repairs, inspections etc. often have no spoken quantity: assume 1, flagged for the user to check.
+        quantity: data.quantity ?? 1,
         unit: data.unit,
         sectionId: data.section?.id ?? null,
+        // Only set when confidently matched; otherwise left blank for the user to choose.
+        structureId: data.structure?.id ?? null,
+        actionId: data.action?.id ?? null,
         assignedTo: data.assignee?.id ?? null,
         priority: data.priority,
         dueDate: data.dueDate,
@@ -246,22 +252,25 @@ export function VoiceTaskDialog() {
             <span className="text-ink-3">You said: </span>“{parsed.transcript}”
           </p>
 
-          {(parsed.unmatched.section || parsed.unmatched.person || !parsed.confident) && (
+          {(parsed.unmatched.section || parsed.unmatched.person || parsed.unmatched.structure || !parsed.confident) && (
             <div className="flex gap-2 rounded-md border border-high/30 bg-high-soft px-3 py-2 text-[13px] text-ink">
               <AlertTriangle className="mt-0.5 size-4 shrink-0 text-high" />
               <div className="space-y-0.5">
                 {!parsed.confident && <p>Some details weren’t clear. Please check before creating.</p>}
                 {parsed.unmatched.section && <p>Section “{parsed.unmatched.section}” was not found — choose one below or leave it for the Inbox.</p>}
-                {parsed.unmatched.person && <p>“{parsed.unmatched.person}” is not a user — choose who should purchase it.</p>}
+                {parsed.unmatched.structure && <p>“{parsed.unmatched.structure}” matches more than one structure — choose the right one below.</p>}
+                {parsed.unmatched.person && <p>“{parsed.unmatched.person}” is not a user — choose who should do it.</p>}
               </div>
             </div>
           )}
 
+          <StructurePicker value={form.structureId} onChange={(id) => set('structureId', id)} />
+
           <div className="rounded-lg border border-line">
-            <ReviewRow label="Item" missing={!form.title.trim()}>
-              <Input value={form.title} onChange={(e) => set('title', e.target.value)} placeholder="What to purchase" data-autofocus={!form.title ? true : undefined} />
+            <ReviewRow label="Task" missing={!form.title.trim()}>
+              <Input value={form.title} onChange={(e) => set('title', e.target.value)} placeholder="What needs to be done" data-autofocus={!form.title ? true : undefined} />
             </ReviewRow>
-            <ReviewRow label="Quantity" missing={!Number.isFinite(form.quantity)}>
+            <ReviewRow label="Quantity" missing={!Number.isFinite(form.quantity)} note={parsed.quantity === null && form.quantity === 1 ? 'Assumed 1 — check' : undefined}>
               <div className="flex">
                 <Input
                   type="number"
@@ -276,6 +285,16 @@ export function VoiceTaskDialog() {
                   ))}
                 </Select>
               </div>
+            </ReviewRow>
+            <ReviewRow label="Action">
+              <Select value={form.actionId ?? ''} onChange={(e) => set('actionId', e.target.value ? Number(e.target.value) : null)}>
+                <option value="">No action</option>
+                {actions.data?.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
+              </Select>
             </ReviewRow>
             <ReviewRow label="Section" missing={!form.sectionId}>
               <Select value={form.sectionId ?? ''} onChange={(e) => set('sectionId', e.target.value ? Number(e.target.value) : null)}>
@@ -321,12 +340,13 @@ export function VoiceTaskDialog() {
   );
 }
 
-function ReviewRow({ label, missing, children }: { label: string; missing?: boolean; children: React.ReactNode }) {
+function ReviewRow({ label, missing, note, children }: { label: string; missing?: boolean; note?: string; children: React.ReactNode }) {
   return (
     <div className="grid grid-cols-[96px_1fr] items-center gap-3 border-b border-line px-3 py-2 last:border-b-0">
       <span className={cx('text-[13px] font-medium', missing ? 'text-high' : 'text-ink-3')}>
         {label}
         {missing && <span className="block text-[11px] font-normal">Not detected</span>}
+        {!missing && note && <span className="block text-[11px] font-normal text-high">{note}</span>}
       </span>
       {children}
     </div>

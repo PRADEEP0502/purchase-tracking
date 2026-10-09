@@ -144,6 +144,34 @@ export async function seedIfEmpty(): Promise<boolean> {
       await tx.insert(schema.activityLogs).values(logs);
     }
 
+    // Demo hierarchy (sample data only — real structures are created by admins in Settings).
+    const st = schema.taskStructures;
+    const [plantA, plantB] = await tx
+      .insert(st)
+      .values([
+        { name: 'Compressor Room', sortOrder: 1 },
+        { name: 'Boiler House', sortOrder: 2 },
+      ])
+      .returning();
+    const [comp1] = await tx
+      .insert(st)
+      .values([
+        { name: 'Air Compressor 1', parentId: plantA.id, sortOrder: 1 },
+        { name: 'Air Compressor 2', parentId: plantA.id, sortOrder: 2 },
+        { name: 'Feed Pump', parentId: plantB.id, sortOrder: 1 },
+        { name: 'Burner', parentId: plantB.id, sortOrder: 2 },
+      ])
+      .returning();
+    // Demo tasks are purchase requests; file a few under the sample hierarchy.
+    await tx.execute(sql`update ${schema.purchaseTasks} set action_id = (select id from ${schema.taskActions} where name = 'Purchase') where action_id is null`);
+    await tx.execute(sql`update ${schema.purchaseTasks} set structure_id = ${comp1.id} where title in ('Bearing', 'V-Belt')`);
+    await tx.execute(sql`update ${schema.purchaseTasks} set structure_id = ${plantB.id} where title = 'Hydraulic Oil'`);
+    // Demo assignments are acknowledged, except one left waiting to show the alert flow.
+    await tx.execute(sql`update ${schema.purchaseTasks} set assigned_at = created_at where assigned_to is not null`);
+    await tx.execute(
+      sql`update ${schema.purchaseTasks} set acknowledged_at = created_at, acknowledged_by = assigned_to where assigned_to is not null and title <> 'Bearing'`,
+    );
+
     const bearing = await tx.select().from(schema.purchaseTasks).where(sql`${schema.purchaseTasks.title} = 'Bearing'`);
     await tx.insert(schema.notifications).values({
       userId: userId('Ashok')!,
