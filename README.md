@@ -28,7 +28,7 @@ A plain **Web Service** also works — Build: `npm ci --include=dev && npm run b
 
 - On first visit the app shows **Set up JPM Purchase** to create the admin account (only while no users exist).
 - The session secret is generated and stored in the database if `JWT_SECRET` is not set.
-- Add `DATABASE_URL` (a Render PostgreSQL *Internal Database URL*) so data is kept permanently — without it the admin sees a "Data is temporary" warning, because free instances lose local files on every restart.
+- **Required on Render:** `DATABASE_URL` (a Render PostgreSQL *Internal Database URL*). The built-in database needs ~600 MB RAM (more than the 512 MB free plan) and Render deletes local files on restart, so without it the app stops with a message explaining this.
 - Optional: `FIREBASE_VAPID_KEY` + `FIREBASE_SERVICE_ACCOUNT` for push alerts.
 
 ## Production (any Node host)

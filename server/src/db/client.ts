@@ -57,6 +57,23 @@ async function connect(): Promise<Database> {
   }
 
   // Embedded PostgreSQL (PGlite) for local development and single-machine installs.
+  // It needs ~600 MB of memory, more than small cloud plans allow, and cloud instances
+  // usually lose local files on restart — so on Render a real database is required.
+  if (process.env.RENDER) {
+    console.error(
+      [
+        '',
+        '❌ DATABASE_URL is not set.',
+        '   On Render the app needs a PostgreSQL database (the built-in one needs more memory than the free plan has,',
+        '   and Render deletes local files on every restart).',
+        '   Fix: Render dashboard → New + → PostgreSQL (Free) → copy its "Internal Database URL" →',
+        '        your web service → Environment → add DATABASE_URL = <that URL> → Save → Deploy.',
+        '',
+      ].join('\n'),
+    );
+    process.exit(1);
+  }
+  if (config.isProduction) console.warn('No DATABASE_URL — using the embedded database (needs ~600 MB RAM; data stays on this machine).');
   const { PGlite } = await import('@electric-sql/pglite');
   const { drizzle: drizzlePglite } = await import('drizzle-orm/pglite');
   fs.mkdirSync(config.pgliteDir, { recursive: true });
