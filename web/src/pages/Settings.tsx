@@ -5,6 +5,8 @@ import { toast } from 'sonner';
 import { ArrowDown, ArrowUp, Monitor, Moon, PencilLine, Plus, Settings as SettingsIcon, Sun } from 'lucide-react';
 import { useAuth } from '../auth';
 import { ActionSettings, StructureSettings } from './CatalogSettings';
+import { InstallCard } from '../components/InstallPrompt';
+import { enablePush, pushState, type PushState } from '../lib/push';
 import { desktopPermission, playAlertSound, requestDesktopPermission, setSoundEnabled, soundEnabled } from '../lib/alerts';
 import { PageHeader, Panel } from '../components/Page';
 import { SECTION_ICONS, SectionIcon } from '../components/task-bits';
@@ -166,6 +168,8 @@ function ProfileSettings() {
 
       <AlertSettings />
 
+      <InstallCard />
+
       <Card title="Change password">
         <form onSubmit={changePassword} className="grid gap-4 sm:grid-cols-2">
           <Field label="Current password" error={errors.currentPassword}>
@@ -206,6 +210,54 @@ function ProfileSettings() {
   );
 }
 
+/** Push alerts (Firebase): ring this phone even when the app is closed. */
+function PushRow() {
+  const [state, setState] = useState<PushState | 'loading'>('loading');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    pushState()
+      .then(setState)
+      .catch(() => setState('off'));
+  }, []);
+  const text: Record<PushState | 'loading', string> = {
+    loading: 'Checking…',
+    on: 'On for this device — alerts arrive even when the app is closed.',
+    off: 'Off for this device.',
+    'not-configured': 'Not set up on the server yet (an admin adds the Firebase keys).',
+    unsupported: 'This browser cannot receive push alerts. On iPhone, install the app to the Home Screen first.',
+    denied: 'Blocked — allow notifications for this site in your browser settings.',
+  };
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
+      <div>
+        <p className="text-sm font-medium">Push alerts when the app is closed</p>
+        <p className="text-xs text-ink-3">{text[state]}</p>
+      </div>
+      {state === 'off' && (
+        <Button
+          size="sm"
+          variant="primary"
+          loading={busy}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              const next = await enablePush(true);
+              setState(next);
+              if (next === 'on') toast.success('Push alerts turned on for this device');
+            } catch {
+              toast.error('Could not turn on push alerts. Please try again.');
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          Turn on
+        </Button>
+      )}
+    </div>
+  );
+}
+
 function AlertSettings() {
   const [permission, setPermission] = useState(desktopPermission());
   const [sound, setSound] = useState(soundEnabled());
@@ -217,7 +269,7 @@ function AlertSettings() {
       <div className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className="text-sm font-medium">Desktop notifications</p>
+            <p className="text-sm font-medium">Notifications</p>
             <p className="text-xs text-ink-3">
               {permission === 'granted'
                 ? 'On — you are notified even when this tab is in the background.'
@@ -234,6 +286,7 @@ function AlertSettings() {
             </Button>
           )}
         </div>
+        <PushRow />
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
           <div>
             <p className="text-sm font-medium">Alert sound</p>

@@ -13,10 +13,14 @@ import {
   playAlertSound,
   requestDesktopPermission,
   showDesktopNotification,
+  vibrateFor,
   type LiveAlert,
 } from '../lib/alerts';
 import { cx, fmtDateOnly, relative } from '../lib/format';
 import { useDashboard, useInvalidateTasks } from '../lib/queries';
+import { useInstall } from '../lib/pwa';
+import { enablePush } from '../lib/push';
+import { installDismissed } from './InstallPrompt';
 import { useAppState } from './app-state';
 import { ActionBadge, PriorityBadge, StructurePath } from './task-bits';
 import { Button, IconButton } from './ui';
@@ -112,10 +116,25 @@ export function AlertCenter() {
   const [alerts, setAlerts] = useState<LiveAlert[]>([]);
   const [permission, setPermission] = useState(desktopPermission());
   const [showPrompt, setShowPrompt] = useState(!desktopPromptDismissed());
+  // On phones, one prompt at a time: the install banner first, then the alerts prompt.
+  const install = useInstall();
+  const [installBannerGone, setInstallBannerGone] = useState(installDismissed);
+  useEffect(() => {
+    const onGone = () => setInstallBannerGone(true);
+    window.addEventListener('jpm:install-dismissed', onGone);
+    return () => window.removeEventListener('jpm:install-dismissed', onGone);
+  }, []);
+  const phone = typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches;
+  const installBannerShowing = phone && !installBannerGone && (install.canPrompt || install.iosManual);
 
   const dismiss = useCallback((taskId: number) => setAlerts((list) => list.filter((a) => a.taskId !== taskId)), []);
 
   useEffect(() => installAudioUnlock(), []);
+
+  // Already allowed notifications on this device → (re)register for push alerts.
+  useEffect(() => {
+    if (desktopPermission() === 'granted') enablePush(false).catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     const onAlert = (e: Event) => {
@@ -124,6 +143,7 @@ export function AlertCenter() {
       // One card per task: a reminder replaces the earlier alert.
       setAlerts((list) => [alert, ...list.filter((a) => a.taskId !== alert.taskId)]);
       playAlertSound(alert.level);
+      vibrateFor(alert.level);
       if (document.visibilityState !== 'visible' || !document.hasFocus()) {
         showDesktopNotification(alert, () => openTask(alert.taskId));
       }
@@ -131,9 +151,15 @@ export function AlertCenter() {
     };
     // Acknowledged/closed/reassigned elsewhere → stop alerting for that task.
     const onCleared = (e: Event) => dismiss((e as CustomEvent<{ taskId: number }>).detail.taskId);
+    // Tap on a notification in the phone's notification bar → open that task here.
+    const onSwMessage = (e: MessageEvent) => {
+      if (e.data?.type === 'open-task' && e.data.taskId) openTask(Number(e.data.taskId));
+    };
+    navigator.serviceWorker?.addEventListener('message', onSwMessage);
     window.addEventListener('jpm:alert', onAlert);
     window.addEventListener('jpm:alerts-cleared', onCleared);
     return () => {
+      navigator.serviceWorker?.removeEventListener('message', onSwMessage);
       window.removeEventListener('jpm:alert', onAlert);
       window.removeEventListener('jpm:alerts-cleared', onCleared);
     };
@@ -145,7 +171,8 @@ export function AlertCenter() {
     setShowPrompt(false);
     dismissDesktopPrompt();
     if (result === 'granted') {
-      toast.success('Desktop alerts turned on');
+      enablePush(false).catch(() => undefined);
+      toast.success('Task alerts turned on');
       playAlertSound('normal', true);
     } else if (result === 'denied') {
       toast.error('Notifications are blocked. Allow them in your browser’s site settings.');
@@ -176,13 +203,13 @@ export function AlertCenter() {
         </div>
       )}
 
-      {showPrompt && permission === 'default' && (
+      {showPrompt && permission === 'default' && !installBannerShowing && (
         <div className="fixed bottom-[calc(140px+env(safe-area-inset-bottom))] left-3 z-30 w-[calc(100%-1.5rem)] max-w-sm rounded-lg border border-line bg-surface p-4 shadow-xl animate-in md:bottom-4 md:left-4">
           <div className="flex gap-3">
             <BellRing className="mt-0.5 size-5 shrink-0 text-accent" />
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold">Turn on desktop alerts</p>
-              <p className="mt-0.5 text-[13px] text-ink-2">Get notified the moment a task is assigned to you, even when this tab is in the background.</p>
+              <p className="text-sm font-semibold">Turn on task alerts</p>
+              <p className="mt-0.5 text-[13px] text-ink-2">Get notified the moment a task is assigned to you, even when the app is in the background.</p>
               <div className="mt-3 flex gap-2">
                 <Button size="sm" variant="primary" onClick={enableDesktop}>
                   Turn on

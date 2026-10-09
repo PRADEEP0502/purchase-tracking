@@ -198,25 +198,41 @@ export async function ensureInitialAdmin(): Promise<void> {
   const email = process.env.ADMIN_EMAIL?.trim().toLowerCase();
   const password = process.env.ADMIN_PASSWORD ?? '';
   if (!email || password.length < 8) {
-    console.warn('No users exist. Set ADMIN_EMAIL and ADMIN_PASSWORD (min 8 characters) to create the first admin.');
+    console.warn('No users yet — open the app in a browser to create the first admin account.');
     return;
   }
 
-  await db.transaction(async (tx) => {
+  await createFirstAdmin({ name: process.env.ADMIN_NAME?.trim() || 'Admin', email, password });
+  console.log(`Created first admin account ${email}.`);
+}
+
+/**
+ * Creates the first admin and the standard JPM sections — only while the database has no users.
+ * Returns null if someone else already completed setup.
+ */
+export async function createFirstAdmin(input: { name: string; email: string; password: string }): Promise<number | null> {
+  return db.transaction(async (tx) => {
+    // Serialise concurrent first-run attempts.
+    await tx.execute(sql`lock table ${schema.users} in exclusive mode`);
+    const [{ users }] = await tx.select({ users: sql<number>`count(*)::int` }).from(schema.users);
+    if (users > 0) return null;
     const [{ sectionCount }] = await tx.select({ sectionCount: sql<number>`count(*)::int` }).from(schema.sections);
     if (sectionCount === 0) {
       await tx
         .insert(schema.sections)
         .values(SECTIONS.map(([name, icon, description], i) => ({ name, icon, description, sortOrder: i + 1 })));
     }
-    await tx.insert(schema.users).values({
-      name: process.env.ADMIN_NAME?.trim() || 'Admin',
-      email,
-      role: 'admin',
-      passwordHash: await bcrypt.hash(password, 10),
-    });
+    const [user] = await tx
+      .insert(schema.users)
+      .values({ name: input.name, email: input.email.toLowerCase(), role: 'admin', passwordHash: await bcrypt.hash(input.password, 10) })
+      .returning({ id: schema.users.id });
+    return user.id;
   });
-  console.log(`Created first admin account ${email}.`);
+}
+
+export async function hasUsers(): Promise<boolean> {
+  const [{ count }] = await db.select({ count: sql<number>`count(*)::int` }).from(schema.users);
+  return count > 0;
 }
 
 // Allow `npm run seed`.

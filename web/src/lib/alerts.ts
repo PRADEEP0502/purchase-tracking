@@ -148,7 +148,21 @@ export function alertTitle(alert: Pick<LiveAlert, 'kind' | 'level'>): string {
   }
 }
 
-/** Shows an OS-level notification when permitted. Used when the tab is not in focus. */
+/** Short vibration for high/urgent alerts on phones (ignored where unsupported). */
+export function vibrateFor(level: AlertLevel): void {
+  if (!soundEnabled() || typeof navigator.vibrate !== 'function') return;
+  try {
+    if (level === 'urgent') navigator.vibrate([400, 150, 400, 150, 400]);
+    else if (level === 'high') navigator.vibrate([200, 100, 200]);
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Shows a notification in the OS notification bar when permitted. Used when the app is not in focus.
+ * Goes through the service worker when installed (required on Android; tapping opens the task).
+ */
 export function showDesktopNotification(alert: LiveAlert, onClick: () => void): void {
   if (desktopPermission() !== 'granted') return;
   const d = alert.data;
@@ -157,14 +171,23 @@ export function showDesktopNotification(alert: LiveAlert, onClick: () => void): 
     [d.structurePath?.join(' › '), d.action].filter(Boolean).join(' · '),
     d.assignedBy ? `Assigned by ${d.assignedBy}` : '',
   ].filter(Boolean);
+  const title = `${alert.level === 'urgent' ? '🚨' : '🔔'} ${alertTitle(alert)}`;
+  const options: NotificationOptions & { vibrate?: number[] } = {
+    body: lines.join('\n'),
+    icon: '/icons/icon-192.png',
+    badge: '/icons/icon-192.png',
+    // Same task → replace instead of stacking.
+    tag: `jpm-task-${alert.taskId}`,
+    requireInteraction: alert.level === 'urgent',
+    data: { taskId: alert.taskId },
+    vibrate: alert.level === 'urgent' ? [400, 150, 400, 150, 400] : [200, 100, 200],
+  };
+  if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+    navigator.serviceWorker.ready.then((reg) => reg.showNotification(title, options)).catch(() => undefined);
+    return;
+  }
   try {
-    const n = new Notification(`${alert.level === 'urgent' ? '🚨' : '🔔'} ${alertTitle(alert)}`, {
-      body: lines.join('\n'),
-      icon: '/favicon.svg',
-      // Same task → replace instead of stacking.
-      tag: `jpm-task-${alert.taskId}`,
-      requireInteraction: alert.level === 'urgent',
-    });
+    const n = new Notification(title, options);
     n.onclick = () => {
       window.focus();
       onClick();

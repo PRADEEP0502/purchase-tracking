@@ -26,6 +26,8 @@ import { useLiveUpdates } from '../lib/live';
 import { useAppState } from './app-state';
 import { NotificationsButton } from './Notifications';
 import { AlertCenter, AwaitingAckBar } from './AlertCenter';
+import { InstallBanner } from './InstallPrompt';
+import { SystemWarning } from './SystemWarning';
 import { SectionIcon } from './task-bits';
 import { TaskFormDialog } from './TaskForm';
 import { TaskPanel } from './TaskPanel';
@@ -207,6 +209,25 @@ export function Layout() {
 
   useEffect(() => setDrawer(false), [location.pathname]);
 
+  // Home-screen shortcuts: /?new=1 and /?voice=1 open the create dialogs.
+  const [params, setParams] = useSearchParams();
+  useEffect(() => {
+    const action = params.get('new') ? 'new' : params.get('voice') ? 'voice' : null;
+    if (!action) return;
+    setParams(
+      (p) => {
+        const n = new URLSearchParams(p);
+        n.delete('new');
+        n.delete('voice');
+        return n;
+      },
+      { replace: true },
+    );
+    if (action === 'new') openCreate();
+    else openVoice();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const toggleCollapsed = () =>
     setCollapsed((c) => {
       try {
@@ -286,7 +307,9 @@ export function Layout() {
         </header>
 
         <main className="min-h-0 flex-1 overflow-y-auto pb-24 md:pb-8">
+          <SystemWarning />
           <AwaitingAckBar />
+          <InstallBanner />
           <Outlet />
         </main>
       </div>

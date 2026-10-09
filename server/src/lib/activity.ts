@@ -1,6 +1,7 @@
 import { and, eq, inArray, isNull, ne } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import { sendToUser } from './events.js';
+import { sendPush } from '../services/push.js';
 
 export type ActivityAction =
   | 'created'
@@ -64,6 +65,29 @@ export async function notify(
     .returning({ id: schema.notifications.id, userId: schema.notifications.userId, createdAt: schema.notifications.createdAt });
   for (const r of rows) {
     sendToUser(r.userId, { type: 'notification', notificationId: r.id, taskId, kind: type, level, message, data, createdAt: r.createdAt.toISOString() });
+  }
+  // Work waiting on the recipient also goes to their phones (works with the app closed).
+  if (ALERT_TYPES.includes(type)) {
+    const body = [data.label ?? message, data.assignedBy ? `Assigned by ${data.assignedBy}` : null].filter(Boolean).join(' · ');
+    sendPush(unique, { title: pushTitle(type, level), body: String(body), taskId, level, kind: type }).catch((e) =>
+      console.error('[push]', (e as Error).message),
+    );
+  }
+}
+
+function pushTitle(kind: string, level: AlertLevel): string {
+  const icon = level === 'urgent' ? '🚨' : '🔔';
+  switch (kind) {
+    case 'assigned':
+      return `${icon} ${level === 'urgent' ? 'Urgent task assigned' : 'New task assigned'}`;
+    case 'reminder':
+      return `${icon} Reminder: urgent task not received`;
+    case 'due':
+      return `${icon} Task due today`;
+    case 'overdue':
+      return `${icon} Task overdue`;
+    default:
+      return `${icon} Urgent task`;
   }
 }
 

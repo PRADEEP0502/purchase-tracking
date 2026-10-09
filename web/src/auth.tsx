@@ -2,12 +2,15 @@ import { createContext, useCallback, useContext, useEffect, type ReactNode } fro
 import { useQueryClient } from '@tanstack/react-query';
 import { api, setUnauthenticatedHandler } from './lib/api';
 import { useMe } from './lib/queries';
+import { disablePush } from './lib/push';
 import type { Me } from './lib/types';
 
 interface AuthCtx {
   user: Me | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
+  /** First run only: create the first admin account and sign in. */
+  setup: (name: string, email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -35,7 +38,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     qc.setQueryData(['me'], data);
   };
 
+  const setup = async (name: string, email: string, password: string) => {
+    const { data } = await api.post<Me>('/auth/setup', { name, email, password });
+    resetCache();
+    qc.setQueryData(['me'], data);
+  };
+
   const logout = async () => {
+    await disablePush();
     try {
       await api.post('/auth/logout');
     } finally {
@@ -43,7 +53,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  return <Ctx.Provider value={{ user: me.data ?? null, loading: me.isPending, login, logout }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ user: me.data ?? null, loading: me.isPending, login, setup, logout }}>{children}</Ctx.Provider>;
 }
 
 export function useAuth(): AuthCtx {

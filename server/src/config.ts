@@ -1,29 +1,16 @@
-import fs from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const serverRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const isProduction = process.env.NODE_ENV === 'production';
 
-function jwtSecret(): string {
-  const secret = process.env.JWT_SECRET;
-  if (secret && secret.length >= 32) return secret;
-  if (isProduction) {
-    throw new Error('JWT_SECRET must be set (at least 32 characters) in production.');
-  }
-  // Development only: generate a secret once and keep it in the (git-ignored) data folder
-  // so sessions survive server restarts.
-  const file = path.join(serverRoot, 'data', '.dev-jwt-secret');
-  try {
-    return fs.readFileSync(file, 'utf8').trim();
-  } catch {
-    const generated = crypto.randomBytes(48).toString('hex');
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, generated, { mode: 0o600 });
-    return generated;
-  }
+/** Optional: an explicit session secret. If unset, one is generated and stored in the database. */
+function jwtSecretFromEnv(): string | null {
+  const secret = process.env.JWT_SECRET?.trim();
+  if (!secret) return null;
+  if (secret.length < 32) throw new Error('JWT_SECRET is too short — use at least 32 random characters, or remove it to let the app generate one.');
+  return secret;
 }
 
 export const config = {
@@ -35,7 +22,7 @@ export const config = {
   storageDir: process.env.STORAGE_DIR ?? path.join(serverRoot, 'data', 'uploads'),
   webDistDir: path.resolve(serverRoot, '..', 'web', 'dist'),
   migrationsDir: path.join(serverRoot, 'drizzle'),
-  jwtSecret: jwtSecret(),
+  jwtSecretEnv: jwtSecretFromEnv(),
   /** Business timezone: used for "today", date filters and day boundaries. */
   timezone: process.env.APP_TIMEZONE ?? 'Asia/Kolkata',
   sessionDays: 14,

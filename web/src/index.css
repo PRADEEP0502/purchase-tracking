@@ -149,3 +149,55 @@ body {
     transition-duration: 1ms !important;
   }
 }
+
+/* ---------------------------------------------------------------------------
+ * App-like behaviour on phones
+ * ------------------------------------------------------------------------- */
+
+/* No rubber-band scrolling of the whole page (lists scroll inside the app). */
+html,
+body {
+  overscroll-behavior-y: none;
+}
+
+/* iOS zooms into inputs smaller than 16px — keep forms steady on phones. */
+@media (max-width: 640px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
+/* Native-feeling taps: no long-press menus or text selection on controls, quick press feedback. */
+button,
+nav a,
+[role='button'] {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
+}
+@media (hover: none) {
+  nav a:active,
+  nav button:active,
+  [role='button']:active {
+    opacity: 0.7;
+  }
+}
+
+/* Installed app: the browser bar is gone, so leave room for the status bar notch. */
+@media (display-mode: standalone) {
+  body {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  input,
+  textarea,
+  [contenteditable],
+  p,
+  .selectable {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}

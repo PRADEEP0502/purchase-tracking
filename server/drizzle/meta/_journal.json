@@ -22,6 +22,20 @@
       "when": 1791463349798,
       "tag": "0002_assignment_alerts",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791545618658,
+      "tag": "0003_push_tokens",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791548947778,
+      "tag": "0004_app_settings",
+      "breakpoints": true
     }
   ]
 }

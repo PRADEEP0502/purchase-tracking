@@ -2,9 +2,11 @@ import { config } from './config.js';
 import { closeDb, runMigrations } from './db/client.js';
 import { ensureInitialAdmin, seedIfEmpty } from './db/seed.js';
 import { createApp } from './app.js';
+import { initSecrets } from './lib/secrets.js';
 import { startReminderScheduler, stopReminderScheduler } from './services/reminders.js';
 
 await runMigrations();
+await initSecrets();
 if (!config.isProduction || process.env.SEED_DEMO === '1') await seedIfEmpty();
 else await ensureInitialAdmin();
 

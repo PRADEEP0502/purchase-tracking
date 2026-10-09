@@ -33,6 +33,11 @@ services:
         sync: false
       - key: ADMIN_PASSWORD
         sync: false
+      # Push alerts (Firebase Cloud Messaging) — optional. Without them, push is simply off.
+      - key: FIREBASE_VAPID_KEY
+        sync: false
+      - key: FIREBASE_SERVICE_ACCOUNT
+        sync: false
 
 databases:
   - name: jpm-purchase-db

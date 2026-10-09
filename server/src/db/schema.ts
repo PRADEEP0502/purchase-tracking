@@ -245,6 +245,29 @@ export const notifications = pgTable(
   (t) => [index('notifications_user_idx').on(t.userId, t.createdAt)],
 );
 
+/** Firebase Cloud Messaging tokens: one per device/browser a user has enabled push alerts on. */
+export const pushTokens = pgTable(
+  'push_tokens',
+  {
+    id: serial('id').primaryKey(),
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    token: text('token').notNull(),
+    userAgent: varchar('user_agent', { length: 300 }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('push_tokens_token_uq').on(t.token), index('push_tokens_user_idx').on(t.userId)],
+);
+
+/** Server-generated settings that must survive restarts (e.g. the session signing secret). */
+export const appSettings = pgTable('app_settings', {
+  key: varchar('key', { length: 60 }).primaryKey(),
+  value: text('value').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type User = typeof users.$inferSelect;
 export type Section = typeof sections.$inferSelect;
 export type PurchaseTask = typeof purchaseTasks.$inferSelect;

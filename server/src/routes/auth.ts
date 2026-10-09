@@ -8,6 +8,7 @@ import { parse, HttpError, badRequest } from '../lib/http.js';
 import { config } from '../config.js';
 import { clearSessionCookie, requireAuth, setSessionCookie } from '../lib/auth.js';
 import { userSectionIds } from '../lib/permissions.js';
+import { createFirstAdmin, hasUsers } from '../db/seed.js';
 
 export const authRouter = Router();
 
@@ -36,6 +37,29 @@ authRouter.post('/login', loginLimiter, async (req, res) => {
   }
   setSessionCookie(res, user.id);
   res.json({ data: await profile(user.id) });
+});
+
+/**
+ * First-run setup: while the database has no users, the sign-in screen offers to create the
+ * first admin account. Closed for good as soon as any user exists.
+ */
+authRouter.get('/setup', async (_req, res) => {
+  res.json({ data: { needsSetup: !(await hasUsers()) } });
+});
+
+authRouter.post('/setup', loginLimiter, async (req, res) => {
+  const input = parse(
+    z.object({
+      name: z.string().trim().min(1, 'Enter your name.').max(120),
+      email: z.string().trim().toLowerCase().email('Enter a valid email.').max(200),
+      password: z.string().min(8, 'Password must be at least 8 characters.').max(200),
+    }),
+    req.body,
+  );
+  const userId = await createFirstAdmin(input);
+  if (!userId) throw new HttpError(409, 'setup_done', 'Setup is already complete. Please sign in.');
+  setSessionCookie(res, userId);
+  res.status(201).json({ data: await profile(userId) });
 });
 
 authRouter.post('/logout', (_req, res) => {

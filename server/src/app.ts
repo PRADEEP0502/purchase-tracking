@@ -5,12 +5,14 @@ import cookieParser from 'cookie-parser';
 import helmetImport from 'helmet';
 import { config } from './config.js';
 import { errorHandler, HttpError } from './lib/http.js';
-import { requireAuth, requireClientHeader } from './lib/auth.js';
+import { requireAdmin, requireAuth, requireClientHeader } from './lib/auth.js';
 import { authRouter } from './routes/auth.js';
 import { tasksRouter } from './routes/tasks.js';
 import { sectionsRouter } from './routes/sections.js';
 import { usersRouter } from './routes/users.js';
 import { actionsRouter, structuresRouter } from './routes/catalog.js';
+import { pushRouter } from './routes/push.js';
+import { pushEnabled } from './services/push.js';
 import {
   activityRouter,
   dashboardRouter,
@@ -39,7 +41,8 @@ export function createApp() {
           mediaSrc: ["'self'", 'blob:'],
           styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
           fontSrc: ["'self'", 'https://fonts.gstatic.com'],
-          connectSrc: ["'self'"],
+          // Firebase Cloud Messaging device registration (push alerts).
+          connectSrc: ["'self'", 'https://fcmregistrations.googleapis.com', 'https://firebaseinstallations.googleapis.com'],
         },
       },
       crossOriginEmbedderPolicy: false,
@@ -64,6 +67,18 @@ export function createApp() {
   api.use('/users', usersRouter);
   api.use('/structures', structuresRouter);
   api.use('/actions', actionsRouter);
+  api.use('/push', pushRouter);
+  // Admin-only deployment health: is data stored permanently, are push alerts configured?
+  api.get('/system', requireAdmin, (_req, res) => {
+    res.json({
+      data: {
+        database: config.databaseUrl ? 'postgres' : 'embedded',
+        // Embedded database on a host without a persistent disk is wiped on restart/redeploy.
+        temporaryData: config.isProduction && !config.databaseUrl && !process.env.PGLITE_DIR,
+        push: pushEnabled(),
+      },
+    });
+  });
   api.use('/dashboard', dashboardRouter);
   api.use('/activity', activityRouter);
   api.use('/notifications', notificationsRouter);
@@ -78,7 +93,18 @@ export function createApp() {
 
   // Serve the built web app in production.
   if (fs.existsSync(config.webDistDir)) {
-    app.use(express.static(config.webDistDir, { index: false, maxAge: '1h' }));
+    app.use(
+      express.static(config.webDistDir, {
+        index: false,
+        maxAge: '1h',
+        setHeaders: (res, filePath) => {
+          // The service worker and manifest must always be revalidated so app updates reach phones.
+          if (/[\\/](sw\.js|manifest\.webmanifest)$/.test(filePath)) res.setHeader('Cache-Control', 'no-cache');
+          // Content-hashed build files never change.
+          else if (/[\\/]assets[\\/]/.test(filePath)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        },
+      }),
+    );
     app.get(/^\/(?!api\/).*/, (_req, res) => {
       res.sendFile(path.join(config.webDistDir, 'index.html'));
     });

@@ -2,6 +2,7 @@ import type { RequestHandler, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { eq } from 'drizzle-orm';
 import { config } from '../config.js';
+import { jwtSecret } from './secrets.js';
 import { db, schema } from '../db/client.js';
 import { HttpError, forbidden } from './http.js';
 
@@ -26,7 +27,7 @@ interface SessionClaims {
 }
 
 export function setSessionCookie(res: Response, userId: number): void {
-  const token = jwt.sign({ sub: String(userId) } satisfies SessionClaims, config.jwtSecret, {
+  const token = jwt.sign({ sub: String(userId) } satisfies SessionClaims, jwtSecret(), {
     expiresIn: `${config.sessionDays}d`,
   });
   res.cookie(config.cookieName, token, {
@@ -51,7 +52,7 @@ export const requireAuth: RequestHandler = async (req, _res, next) => {
 
   let claims: SessionClaims;
   try {
-    claims = jwt.verify(token, config.jwtSecret) as SessionClaims;
+    claims = jwt.verify(token, jwtSecret()) as SessionClaims;
   } catch {
     throw new HttpError(401, 'unauthenticated', 'Your session has expired. Please sign in again.');
   }
