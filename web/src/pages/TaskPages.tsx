@@ -8,7 +8,9 @@ import { AddRow, ListCard, PageHeader, Panel } from '../components/Page';
 import { SectionIcon } from '../components/task-bits';
 import { TaskList } from '../components/TaskList';
 import { Button, EmptyState, Input, Segmented } from '../components/ui';
-import { useDashboard, useSections } from '../lib/queries';
+import { useAcknowledgeAll, useDashboard, useSections } from '../lib/queries';
+import { errorMessage } from '../lib/api';
+import { toast } from 'sonner';
 
 function useTotal() {
   const [total, setTotal] = useState<number | undefined>();
@@ -41,6 +43,7 @@ export function MyTasksPage() {
   const [params, setParams] = useSearchParams();
   const tab = (['ack', 'today', 'upcoming', 'pending', 'completed'].includes(params.get('tab') ?? '') ? params.get('tab') : 'pending') as MyTab;
   const dash = useDashboard();
+  const ackAll = useAcknowledgeAll();
   const [total, onTotal] = useTotal();
   const setTab = (t: MyTab) =>
     setParams((p) => {
@@ -80,6 +83,28 @@ export function MyTasksPage() {
           ]}
         />
       </PageHeader>
+      {tab === 'ack' && !!total && total > 1 && (
+        <div className="mx-4 mb-3 flex items-center justify-between gap-3 rounded-lg border border-high/30 bg-high-soft px-4 py-2.5 sm:mx-5">
+          <span className="text-[13px] text-ink">
+            {total} new tasks are waiting for you.
+          </span>
+          <Button
+            size="sm"
+            variant="primary"
+            loading={ackAll.isPending}
+            onClick={async () => {
+              try {
+                const n = await ackAll.mutateAsync();
+                toast.success(`${n} task${n === 1 ? '' : 's'} marked as received`);
+              } catch (e) {
+                toast.error(errorMessage(e, 'Unable to mark as received. Please try again.'));
+              }
+            }}
+          >
+            Received all
+          </Button>
+        </div>
+      )}
       <ListCard>
         <TaskList key={tab} query={query} onTotal={onTotal} empty={empty} />
       </ListCard>

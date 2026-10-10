@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { BellRing, CalendarDays, Check, Siren, X } from 'lucide-react';
 import { api, errorMessage } from '../lib/api';
@@ -37,13 +37,16 @@ function AlertCard({ alert, onDismiss }: { alert: LiveAlert; onDismiss: () => vo
   const urgent = alert.level === 'urgent';
   // Assignment alerts and reminders go only to the assignee, so they can be acknowledged here.
   const canAck = alert.kind === 'assigned' || alert.kind === 'reminder';
+  // One alert can cover a multi-item order: then "Received" confirms all of them.
+  const many = (d.count ?? 1) > 1;
+  const navigate = useNavigate();
 
   const acknowledge = async () => {
     setBusy(true);
     try {
-      await api.post(`/tasks/${alert.taskId}/acknowledge`);
+      await api.post(many ? '/tasks/acknowledge-all' : `/tasks/${alert.taskId}/acknowledge`);
       invalidate(alert.taskId);
-      toast.success('Marked as received');
+      toast.success(many ? 'All marked as received' : 'Marked as received');
       onDismiss();
     } catch (e) {
       toast.error(errorMessage(e, 'Unable to mark as received. Please try again.'));
@@ -62,7 +65,7 @@ function AlertCard({ alert, onDismiss }: { alert: LiveAlert; onDismiss: () => vo
     >
       <div className={cx('flex items-center gap-2 px-3.5 py-2 text-[13px] font-semibold', urgent ? 'bg-urgent text-white' : alert.level === 'high' ? 'bg-high-soft text-high' : 'bg-accent-soft text-accent')}>
         {urgent ? <Siren className="size-4" /> : <BellRing className="size-4" />}
-        <span className="flex-1">{alertTitle(alert)}</span>
+        <span className="flex-1">{many && alert.kind === 'assigned' ? `${d.count} new tasks assigned` : alertTitle(alert)}</span>
         <span className={cx('text-[11px] font-normal', urgent ? 'text-white/80' : 'opacity-70')}>{relative(alert.createdAt)}</span>
         <button type="button" aria-label="Dismiss alert" onClick={onDismiss} className="-mr-1 rounded p-0.5 opacity-80 hover:opacity-100">
           <X className="size-4" />
@@ -91,15 +94,20 @@ function AlertCard({ alert, onDismiss }: { alert: LiveAlert; onDismiss: () => vo
         <Button
           size="sm"
           onClick={() => {
+            if (many) {
+              navigate('/my?tab=ack');
+              onDismiss();
+              return;
+            }
             openTask(alert.taskId);
             if (!canAck) onDismiss();
           }}
         >
-          Open task
+          {many ? 'View tasks' : 'Open task'}
         </Button>
         {canAck && (
           <Button size="sm" variant={urgent ? 'danger' : 'primary'} loading={busy} icon={<Check className="size-3.5" />} onClick={acknowledge}>
-            Received
+            {many ? 'Received all' : 'Received'}
           </Button>
         )}
       </div>

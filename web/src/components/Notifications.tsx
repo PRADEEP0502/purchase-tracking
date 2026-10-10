@@ -77,7 +77,7 @@ export function NotificationsButton({ className }: { className?: string }) {
                           // Rich assignment / reminder notification
                           <>
                             <span className={cx('block text-[11.5px] font-semibold tracking-wide uppercase', item.level === 'urgent' ? 'text-urgent' : 'text-ink-3')}>
-                              {alertTitle({ kind: item.type, level: item.level })}
+                              {item.type === 'assigned' && (item.data.count ?? 1) > 1 ? `${item.data.count} new tasks assigned` : alertTitle({ kind: item.type, level: item.level })}
                             </span>
                             <span className="mt-0.5 block text-[13.5px] leading-snug font-semibold text-ink">{item.data.label}</span>
                             {(!!item.data.action || !!item.data.structurePath?.length) && (

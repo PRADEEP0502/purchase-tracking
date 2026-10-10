@@ -98,8 +98,8 @@ All responses are `{ data, meta? }` or `{ error: { code, message, fields? } }`.
 ```
 POST   /api/auth/login | /api/auth/logout      GET|PATCH /api/auth/me
 GET    /api/tasks?view=&status=&stage=&section=&structure=&action=&assignee=&priority=&createdBy=&q=&createdFrom=&createdTo=&dueFrom=&dueTo=&closedFrom=&closedTo=&due=&page=&pageSize=
-POST   /api/tasks          GET|PATCH|DELETE /api/tasks/:id
-POST   /api/tasks/:id/close | /reopen | /acknowledge | /start
+POST   /api/tasks | /api/tasks/bulk (several items at once)   GET|PATCH|DELETE /api/tasks/:id
+POST   /api/tasks/:id/close | /reopen | /acknowledge | /start     POST /api/tasks/acknowledge-all
 GET    /api/tasks/:id/thread | /comments | /activity
 POST   /api/tasks/:id/comments | /voice | /attachments     DELETE /api/tasks/:id/attachments/:attachmentId
 GET    /api/sections       POST /api/sections   PATCH /api/sections/:id   POST /api/sections/reorder

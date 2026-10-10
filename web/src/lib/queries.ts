@@ -177,6 +177,25 @@ export function useCreateTask() {
   });
 }
 
+/** Order several items at once: shared details + a list of items, one task per item. */
+export function useCreateTasksBulk() {
+  const invalidate = useInvalidateTasks();
+  return useMutation({
+    mutationFn: (input: Omit<TaskInput, 'title' | 'quantity' | 'unit'> & { items: Array<Pick<TaskInput, 'title' | 'quantity' | 'unit'>> }) =>
+      api.post<Task[]>('/tasks/bulk', input as unknown as Record<string, unknown>).then((r) => r.data),
+    onSuccess: () => invalidate(),
+  });
+}
+
+/** Marks every task waiting on the signed-in user as received. Returns how many. */
+export function useAcknowledgeAll() {
+  const invalidate = useInvalidateTasks();
+  return useMutation({
+    mutationFn: () => api.post<{ count: number }>('/tasks/acknowledge-all').then((r) => r.data.count),
+    onSuccess: () => invalidate(),
+  });
+}
+
 export function useUpdateTask(id: number) {
   const invalidate = useInvalidateTasks();
   return useMutation({

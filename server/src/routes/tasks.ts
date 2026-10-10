@@ -236,6 +236,93 @@ tasksRouter.post('/', async (req, res) => {
   res.status(201).json({ data: withPermissions(user, row) });
 });
 
+/**
+ * Order several items at once: the shared details (structure, action, section, assignee,
+ * priority, due date) are entered once and each item becomes its own task, so every item can be
+ * received and closed separately. The assignee gets a single alert for the whole order.
+ */
+const bulkSchema = z.object({
+  items: z
+    .array(z.object({ title: taskFields.title, quantity: taskFields.quantity, unit: taskFields.unit.default('Nos') }))
+    .min(1, 'Add at least one item.')
+    .max(30, 'You can add up to 30 items at a time.'),
+  description: taskFields.description.optional(),
+  sectionId: taskFields.sectionId.optional(),
+  structureId: taskFields.structureId.optional(),
+  actionId: taskFields.actionId.optional(),
+  assignedTo: taskFields.assignedTo.optional(),
+  priority: taskFields.priority.default('normal'),
+  dueDate: taskFields.dueDate.optional(),
+});
+
+tasksRouter.post('/bulk', async (req, res) => {
+  const user = req.user!;
+  const input = parse(bulkSchema, req.body);
+  const section = await assertActiveSection(input.sectionId);
+  const assignee = await assertActiveUser(input.assignedTo);
+  const structure = await assertActiveStructure(input.structureId);
+  const action = await assertActiveAction(input.actionId);
+  const path = structure ? structurePath(await loadStructureTree(), structure.id) : [];
+
+  // All items are created together or not at all.
+  const tasks = await db.transaction(async (tx) => {
+    const created = await tx
+      .insert(schema.purchaseTasks)
+      .values(
+        input.items.map((item) => ({
+          title: item.title,
+          quantity: item.quantity,
+          unit: item.unit,
+          description: input.description || null,
+          sectionId: section?.id ?? null,
+          structureId: structure?.id ?? null,
+          actionId: action?.id ?? null,
+          assignedTo: assignee?.id ?? null,
+          priority: input.priority,
+          dueDate: input.dueDate ?? null,
+          createdBy: user.id,
+          ...assignmentFields(assignee?.id ?? null, user.id),
+        })),
+      )
+      .returning();
+    await tx.insert(schema.activityLogs).values(
+      created.flatMap((task) => [
+        { taskId: task.id, userId: user.id, action: 'created', metadata: { title: label(task), via: 'form', action: action?.name ?? null, structure: path, batch: created.length } },
+        ...(assignee ? [{ taskId: task.id, userId: user.id, action: 'assigned', metadata: { to: assignee.id, toName: assignee.name } }] : []),
+      ]),
+    );
+    return created;
+  });
+
+  // One alert for the whole order instead of one per item.
+  const first = tasks[0];
+  const summary = tasks.length === 1 ? label(first) : `${tasks.length} items: ${tasks.map(label).join(', ')}`;
+  const shortSummary = summary.length > 180 ? `${summary.slice(0, 180)}…` : summary;
+  if (assignee) {
+    if (tasks.length === 1) await sendAssignmentAlert(first, assignee.id, user);
+    else {
+      await notify([assignee.id], user.id, first.id, 'assigned', `${tasks.length} new tasks assigned to you by ${user.name}`, {
+        level: input.priority,
+        data: { ...(await alertDetails(first, user.name)), label: shortSummary, count: tasks.length },
+      });
+    }
+  }
+  if (input.priority === 'urgent') {
+    const recipients = section ? await sectionMemberIds(section.id) : await adminIds(user.id);
+    await notify(
+      recipients.filter((id) => id !== assignee?.id),
+      user.id,
+      first.id,
+      'urgent',
+      `Urgent ${action ? action.name.toLowerCase() : 'task'}: ${shortSummary}${section ? ` for ${section.name}` : ''}.`,
+    );
+  }
+
+  for (const task of tasks) broadcast({ type: 'task.changed', taskId: task.id });
+  const rows = await Promise.all(tasks.map((task) => getTaskRow(task.id)));
+  res.status(201).json({ data: rows.map((row) => withPermissions(user, row!)) });
+});
+
 tasksRouter.get('/:id', async (req, res) => {
   const user = req.user!;
   const task = await loadVisibleTask(user, idParam(req));
@@ -390,6 +477,34 @@ tasksRouter.post('/:id/close', async (req, res) => {
   await notify([task.createdBy, task.assignedTo], user.id, task.id, 'closed', `${user.name} closed ${label(task)}.`);
   broadcast({ type: 'task.changed', taskId: task.id });
   res.json({ data: withPermissions(user, (await getTaskRow(task.id))!) });
+});
+
+/** Marks every task still waiting on the signed-in user as received (e.g. a multi-item order). */
+tasksRouter.post('/acknowledge-all', async (req, res) => {
+  const user = req.user!;
+  const now = new Date();
+  const t = schema.purchaseTasks;
+  const updated = await db
+    .update(t)
+    .set({ acknowledgedAt: now, acknowledgedBy: user.id, updatedAt: now })
+    .where(and(eq(t.assignedTo, user.id), eq(t.status, 'pending'), isNull(t.acknowledgedAt)))
+    .returning();
+
+  if (updated.length) {
+    await db.insert(schema.activityLogs).values(updated.map((task) => ({ taskId: task.id, userId: user.id, action: 'acknowledged', metadata: {} })));
+    // One note per requester, not one per task.
+    const byCreator = new Map<number, schema.PurchaseTask[]>();
+    for (const task of updated) byCreator.set(task.createdBy, [...(byCreator.get(task.createdBy) ?? []), task]);
+    for (const [creatorId, tasks] of byCreator) {
+      const text = tasks.length === 1 ? `${user.name} received ${label(tasks[0])}.` : `${user.name} received ${tasks.length} tasks.`;
+      await notify([creatorId], user.id, tasks[0].id, 'acknowledged', text);
+    }
+    for (const task of updated) {
+      await clearAlerts(task.id, user.id);
+      broadcast({ type: 'task.changed', taskId: task.id });
+    }
+  }
+  res.json({ data: { count: updated.length } });
 });
 
 /** The assignee confirms they have seen the assignment. Stops alarms and reminders. */

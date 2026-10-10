@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
-import { Flag, Mic, Paperclip, X } from 'lucide-react';
+import { Flag, Mic, Paperclip, Plus, X } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
 import { errorMessage, ApiError } from '../lib/api';
 import { cx, fileSize, taskLabel, UNITS, PRIORITY_LABEL } from '../lib/format';
-import { useActions, useCreateTask, useSections, useUpdateTask, useUsers, type TaskInput } from '../lib/queries';
+import { useActions, useCreateTask, useCreateTasksBulk, useSections, useUpdateTask, useUsers, type TaskInput } from '../lib/queries';
 import type { Priority } from '../lib/types';
 import { useAppState } from './app-state';
 import { StructurePicker } from './StructurePicker';
@@ -18,6 +18,12 @@ export function checkFiles(files: File[]): string | null {
   if (big) return `File upload failed. “${big.name}” is larger than the maximum file size of 10 MB.`;
   if (files.length > 10) return 'You can attach up to 10 files at a time.';
   return null;
+}
+
+interface ExtraItem {
+  title: string;
+  quantity: number;
+  unit: string;
 }
 
 const empty: TaskInput = {
@@ -52,11 +58,15 @@ export function TaskFormDialog() {
   const users = useUsers();
   const actions = useActions();
   const create = useCreateTask();
+  const createMany = useCreateTasksBulk();
   const update = useUpdateTask(editing?.id ?? 0);
   const [form, setForm] = useState<TaskInput>(empty);
   const [files, setFiles] = useState<File[]>([]);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [showMore, setShowMore] = useState(false);
+  // Extra items ordered together with the first one (each becomes its own task).
+  const [extra, setExtra] = useState<ExtraItem[]>([]);
+  const extraRefs = useRef<Array<HTMLInputElement | null>>([]);
   const fileInput = useRef<HTMLInputElement>(null);
   const titleRef = useRef<HTMLInputElement>(null);
 
@@ -64,6 +74,7 @@ export function TaskFormDialog() {
     if (!createOpen) return;
     setErrors({});
     setFiles([]);
+    setExtra([]);
     if (editing) {
       setForm({
         title: editing.title,
@@ -103,12 +114,29 @@ export function TaskFormDialog() {
     if (errors[k]) setErrors((e) => ({ ...e, [k]: '' }));
   };
 
+  // Rows left completely empty are ignored; partly filled rows must be completed.
+  const filledExtra = extra.filter((x) => x.title.trim() || Number.isFinite(x.quantity));
+
   const validate = (): boolean => {
     const e: Record<string, string> = {};
     if (!form.title.trim()) e.title = 'Enter what needs to be done.';
     if (!Number.isFinite(form.quantity) || form.quantity <= 0) e.quantity = 'Enter a quantity.';
+    if (filledExtra.some((x) => !x.title.trim() || !Number.isFinite(x.quantity) || x.quantity <= 0)) {
+      e.extra = 'Each item needs a name and a quantity.';
+    }
     setErrors(e);
     return !Object.keys(e).length;
+  };
+
+  const addExtraRow = () => {
+    if (extra.length >= 29) return toast.error('You can add up to 30 items at a time.');
+    setExtra((list) => [...list, { title: '', quantity: NaN, unit: 'Nos' }]);
+    requestAnimationFrame(() => extraRefs.current[extra.length]?.focus());
+  };
+
+  const setExtraAt = (i: number, patch: Partial<ExtraItem>) => {
+    setExtra((list) => list.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+    if (errors.extra) setErrors((e) => ({ ...e, extra: '' }));
   };
 
   const submit = async (ev?: FormEvent) => {
@@ -120,6 +148,13 @@ export function TaskFormDialog() {
         await update.mutateAsync(input);
         toast.success('Task updated');
         closeCreate();
+      } else if (filledExtra.length) {
+        // Several items: one task per item, shared details, one alert for the assignee.
+        const { title, quantity, unit, ...common } = input;
+        const items = [{ title, quantity, unit }, ...filledExtra.map((x) => ({ title: x.title.trim(), quantity: x.quantity, unit: x.unit }))];
+        const tasks = await createMany.mutateAsync({ ...common, items });
+        closeCreate();
+        toast.success(`${tasks.length} tasks created`, { description: tasks.map((t) => taskLabel(t)).join(', ') });
       } else {
         const { task, uploadError } = await create.mutateAsync({ input, files, source: createPrefill?.source ?? 'form' });
         closeCreate();
@@ -143,7 +178,7 @@ export function TaskFormDialog() {
     setFiles(next);
   };
 
-  const busy = create.isPending || update.isPending;
+  const busy = create.isPending || update.isPending || createMany.isPending;
   const activeSections = sections.data?.filter((s) => s.isActive) ?? [];
 
   return (
@@ -161,7 +196,7 @@ export function TaskFormDialog() {
           </span>
           <Button onClick={closeCreate}>Cancel</Button>
           <Button variant="primary" loading={busy} onClick={() => submit()}>
-            {editing ? 'Save changes' : 'Create Task'}
+            {editing ? 'Save changes' : filledExtra.length ? `Create ${filledExtra.length + 1} Tasks` : 'Create Task'}
           </Button>
         </>
       }
@@ -229,7 +264,7 @@ export function TaskFormDialog() {
           {errors.title && <p className="mt-1 text-xs text-urgent">{errors.title}</p>}
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Quantity" required error={errors.quantity}>
             <div className="flex">
               <Input
@@ -266,6 +301,75 @@ export function TaskFormDialog() {
             </Select>
           </Field>
         </div>
+
+        {!editing && (
+          <div>
+            {extra.length > 0 && (
+              <div className="mb-2 space-y-2">
+                <p className="text-[13px] font-medium text-ink-2">More items in this order</p>
+                {extra.map((x, i) => (
+                  <div key={i} className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
+                    <input
+                      ref={(el) => {
+                        extraRefs.current[i] = el;
+                      }}
+                      value={x.title}
+                      maxLength={200}
+                      onChange={(e) => setExtraAt(i, { title: e.target.value })}
+                      onBlur={() => {
+                        if (Number.isFinite(x.quantity)) return;
+                        const sp = splitQuantity(x.title);
+                        if (sp) setExtraAt(i, sp);
+                      }}
+                      onKeyDown={(e) => {
+                        // Enter moves on to the next item for quick list entry.
+                        if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
+                          e.preventDefault();
+                          if (i === extra.length - 1) addExtraRow();
+                          else extraRefs.current[i + 1]?.focus();
+                        }
+                      }}
+                      placeholder={`Item ${i + 2}`}
+                      aria-label={`Item ${i + 2} name`}
+                      autoComplete="off"
+                      className="h-9 min-w-0 basis-full rounded-md border border-line-strong bg-surface px-3 text-sm font-medium text-ink placeholder:font-normal placeholder:text-ink-3 focus:border-accent focus:ring-2 focus:ring-accent/20 focus:outline-none sm:flex-1 sm:basis-0"
+                    />
+                    <div className="min-w-0 flex-1 sm:w-24 sm:flex-none">
+                    <Input
+                      type="number"
+                      inputMode="decimal"
+                      min={0}
+                      step="any"
+                      value={Number.isFinite(x.quantity) ? x.quantity : ''}
+                      onChange={(e) => setExtraAt(i, { quantity: e.target.value === '' ? NaN : Number(e.target.value) })}
+                      placeholder="Qty"
+                      aria-label={`Item ${i + 2} quantity`}
+                    />
+                    </div>
+                    <Select value={x.unit} onChange={(e) => setExtraAt(i, { unit: e.target.value })} className="w-28 shrink-0" aria-label={`Item ${i + 2} unit`}>
+                      {UNITS.map((u) => (
+                        <option key={u}>{u}</option>
+                      ))}
+                    </Select>
+                    <button
+                      type="button"
+                      aria-label={`Remove item ${i + 2}`}
+                      onClick={() => setExtra((list) => list.filter((_, j) => j !== i))}
+                      className="inline-flex size-9 shrink-0 items-center justify-center rounded-md text-ink-3 hover:bg-subtle hover:text-ink"
+                    >
+                      <X className="size-4" />
+                    </button>
+                  </div>
+                ))}
+                {errors.extra && <p className="text-xs text-urgent">{errors.extra}</p>}
+              </div>
+            )}
+            <button type="button" onClick={addExtraRow} className="inline-flex items-center gap-1 text-[13px] font-medium text-accent hover:underline">
+              <Plus className="size-3.5" /> Add another item
+            </button>
+            {extra.length > 0 && <span className="ml-2 text-xs text-ink-3">Each item becomes its own task with the same details.</span>}
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-3">
           <Field label="Priority">
@@ -308,7 +412,9 @@ export function TaskFormDialog() {
           </button>
         )}
 
-        {!editing && (
+        {!editing && filledExtra.length > 0 && <p className="text-xs text-ink-3">To attach files, open each task after creating the order.</p>}
+
+        {!editing && filledExtra.length === 0 && (
           <div>
             <div className="flex items-center gap-2">
               <Button size="sm" icon={<Paperclip className="size-3.5" />} onClick={() => fileInput.current?.click()}>

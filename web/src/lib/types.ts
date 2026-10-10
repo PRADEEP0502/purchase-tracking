@@ -7,6 +7,8 @@ export type AlertLevel = 'normal' | 'high' | 'urgent';
 export interface AlertData {
   title?: string;
   label?: string;
+  /** Number of tasks when one alert covers a multi-item order. */
+  count?: number;
   structurePath?: string[];
   action?: string | null;
   priority?: Priority;
