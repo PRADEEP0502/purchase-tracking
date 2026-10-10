@@ -50,7 +50,6 @@ async function connect(): Promise<Database> {
     const pool = new pg.Pool({
       connectionString: config.databaseUrl,
       max: Number(process.env.PG_POOL_MAX ?? 10),
-      options: `-c timezone=${config.timezone}`,
     });
     closeFn = () => pool.end();
     return drizzlePg(pool, { schema });

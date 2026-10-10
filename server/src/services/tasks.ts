@@ -3,6 +3,7 @@ import { alias } from 'drizzle-orm/pg-core';
 import { db, schema } from '../db/client.js';
 import type { AuthUser } from '../lib/auth.js';
 import { taskPermissions, visibleTasksCondition } from '../lib/permissions.js';
+import { dayEnd, dayStart } from '../lib/dates.js';
 import { loadStructureTree, structureContext, withDescendants, type StructureTree } from './structures.js';
 
 const t = schema.purchaseTasks;
@@ -116,8 +117,6 @@ export interface TaskFilters {
 
 const escapeLike = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
 
-/** `to` dates are inclusive whole days in the server's timezone. */
-const endOfDay = (d: string) => sql`(${d}::date + interval '1 day')`;
 
 export async function listTasks(user: AuthUser, f: TaskFilters) {
   const tree = await loadStructureTree();
@@ -168,12 +167,13 @@ export async function listTasks(user: AuthUser, f: TaskFilters) {
   if (f.actionIds?.length || f.noAction) {
     where.push(or(f.actionIds?.length ? inArray(t.actionId, f.actionIds) : undefined, f.noAction ? isNull(t.actionId) : undefined));
   }
-  if (f.createdFrom) where.push(gte(t.createdAt, sql`${f.createdFrom}::date`));
-  if (f.createdTo) where.push(lt(t.createdAt, endOfDay(f.createdTo)));
+  // "From"/"to" dates are inclusive whole days in the business timezone.
+  if (f.createdFrom) where.push(gte(t.createdAt, dayStart(f.createdFrom)));
+  if (f.createdTo) where.push(lt(t.createdAt, dayEnd(f.createdTo)));
   if (f.dueFrom) where.push(gte(t.dueDate, f.dueFrom));
   if (f.dueTo) where.push(lte(t.dueDate, f.dueTo));
-  if (f.closedFrom) where.push(gte(t.closedAt, sql`${f.closedFrom}::date`));
-  if (f.closedTo) where.push(lt(t.closedAt, endOfDay(f.closedTo)));
+  if (f.closedFrom) where.push(gte(t.closedAt, dayStart(f.closedFrom)));
+  if (f.closedTo) where.push(lt(t.closedAt, dayEnd(f.closedTo)));
 
   if (f.due === 'today') {
     // Today = due today or overdue, still pending.

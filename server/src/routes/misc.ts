@@ -7,7 +7,7 @@ import { parse, idParam, notFound } from '../lib/http.js';
 import { visibleTasksCondition, loadVisibleTask } from '../lib/permissions.js';
 import { addClient } from '../lib/events.js';
 import { filePath } from '../lib/storage.js';
-import { todayISO } from '../lib/dates.js';
+import { dayStart, todayISO } from '../lib/dates.js';
 import { ruleBasedParser } from '../voice/parser.js';
 import { loadStructureTree, structureChain } from '../services/structures.js';
 
@@ -35,7 +35,7 @@ dashboardRouter.get('/', async (req, res) => {
         mine: sql<number>`count(*) filter (where ${t.status} = 'pending' and ${t.assignedTo} = ${user.id})::int`,
         awaitingAck: sql<number>`count(*) filter (where ${t.status} = 'pending' and ${t.assignedTo} = ${user.id} and ${t.acknowledgedAt} is null)::int`,
         inbox: sql<number>`count(*) filter (where ${t.status} = 'pending' and (${t.sectionId} is null or ${t.assignedTo} is null))::int`,
-        completedToday: sql<number>`count(*) filter (where ${t.status} = 'completed' and ${t.closedAt} >= ${today}::date)::int`,
+        completedToday: sql<number>`count(*) filter (where ${t.status} = 'completed' and ${t.closedAt} >= ${dayStart(today)})::int`,
       })
       .from(t)
       .where(visible),
